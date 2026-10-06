@@ -47,6 +47,10 @@ def inject_css():
       .stButton button { border-radius: 999px; border-color: #315448; font-weight:600; }
       .stDataFrame { border:1px solid #242d37; border-radius:14px; overflow:hidden; }
       [data-testid="stRadio"] label { border-radius:9px; }
+      [data-testid="stRadio"] { gap: .45rem; }
+      [data-testid="stRadio"] label { padding: .15rem .25rem; }
+      .chart-heading { font-size:1.55rem; font-weight:700; letter-spacing:-.045em; margin:0 0 .6rem; }
+      .chart-meta { color:#8d98a7; font-size:.82rem; margin-top:-.35rem; margin-bottom:.65rem; }
       </style>
     """, unsafe_allow_html=True)
 
@@ -94,10 +98,10 @@ def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False)
     base = alt.Chart(view).encode(x=alt.X("date:T", title=None, axis=alt.Axis(grid=False, labelColor=MUTED)), tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("open:Q", title="Open", format=".2f"), alt.Tooltip("high:Q", title="High", format=".2f"), alt.Tooltip("low:Q", title="Low", format=".2f"), alt.Tooltip("close:Q", title="Close", format=".2f")])
     if candle:
         color = alt.condition("datum.open <= datum.close", alt.value(GREEN), alt.value(RED))
-        chart = base.mark_rule().encode(y=alt.Y("low:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)), y2="high:Q", color=color) + base.mark_bar(size=7).encode(y="open:Q", y2="close:Q", color=color)
+        chart = base.mark_rule().encode(y=alt.Y("low:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(gridColor="#202932", labelColor=MUTED)), y2="high:Q", color=color) + base.mark_bar(size=7).encode(y=alt.Y("open:Q", scale=alt.Scale(zero=False)), y2="close:Q", color=color)
     else:
         chart = base.mark_area(line={"color": ACCENT, "strokeWidth": 2.5}, color=alt.Gradient(gradient="linear", stops=[alt.GradientStop(color="rgba(43,212,164,.22)", offset=0), alt.GradientStop(color="rgba(43,212,164,0)", offset=1)], x1=1, x2=1, y1=1, y2=0)).encode(y=alt.Y("close:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)))
-    return chart.properties(height=340).configure_view(strokeOpacity=0).configure_axis(domain=False, tickColor="#202932")
+    return chart.properties(height=315).resolve_scale(y="shared").configure_view(strokeOpacity=0).configure_axis(domain=False, tickColor="#202932")
 
 
 def gain(value: float) -> str:
@@ -152,11 +156,12 @@ def screener(data: pd.DataFrame):
 
 
 def charts(data: pd.DataFrame):
-    st.header("Charts")
-    symbol = st.selectbox("Symbol", data.Symbol.tolist())
-    range_label = st.radio("Range", list(RANGES), horizontal=True, index=2)
+    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Live NSE price snapshot with historical Bhavcopy data</div>", unsafe_allow_html=True)
+    symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
+    symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist())
+    range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
-    st.markdown(f"### {symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}", unsafe_allow_html=True)
+    st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
     history = stock_history(symbol, RANGES[range_label])
     if range_label == "1D":
         history = history.tail(1)
