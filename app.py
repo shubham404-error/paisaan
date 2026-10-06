@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-import random
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from nse_mcp import BHAVCOPY_URL, CM_MARKET_URL, call_nse_tool, list_tools
+from nse_mcp import BHAVCOPY_URL, call_nse_tool
 
 st.set_page_config(page_title="InvestorPaisa · Streamlit", page_icon="◒", layout="wide")
 
@@ -52,33 +51,49 @@ def inject_css():
     """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=60)
-def demo_universe() -> pd.DataFrame:
-    return pd.DataFrame([
-        ("TRENT", "Consumer", 5577.20, 12.64, "Strong momentum"),
-        ("MOTILALOFS", "Financials", 1096.30, 6.93, "Above 50D average"),
-        ("TIINDIA", "Auto", 4297.10, 6.58, "Volume expansion"),
-        ("COALINDIA", "Energy", 411.65, -3.16, "Below 20D average"),
-        ("PHOENIXLTD", "Realty", 1567.50, -2.66, "RSI cooling"),
-        ("RELIANCE", "Energy", 1432.50, 1.28, "Above 200D average"),
-        ("HDFCBANK", "Financials", 972.40, .71, "Near breakout"),
-        ("INFY", "IT", 1618.80, -0.45, "Range-bound"),
-        ("TATAMOTORS", "Auto", 702.10, 2.36, "Volume expansion"),
-        ("SUNPHARMA", "Healthcare", 1772.80, 1.07, "Strong momentum"),
-    ], columns=["Symbol", "Sector", "Price", "Change %", "Signal"])
+@st.cache_data(ttl=600, show_spinner="Loading 200 live NSE equities…")
+def live_universe() -> tuple[pd.DataFrame, str]:
+    """Load a 200-stock live universe directly from NSE's CM MCP server."""
+    response = call_nse_tool("cm_get_equity_stocks", {"limit": 200, "symbolFilter": ""})
+    rows = response.get("stocks", [])
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        raise RuntimeError("NSE MCP returned no equity rows.")
+    frame = frame.rename(columns={"symbol": "Symbol", "lastTradedPrice": "Price", "perChange": "Change %", "perChange30d": "30D %", "volume": "Volume", "fiftyTwoWeekHigh": "52W High", "fiftyTwoWeekLow": "52W Low"})
+    return frame, response.get("updatedAt", "NSE MCP")
 
 
-def price_chart(symbol: str):
-    random.seed(symbol)
-    dates = pd.date_range(end=datetime.now(), periods=90)
-    base = demo_universe().set_index("Symbol").loc[symbol, "Price"]
-    prices = []
-    current = base * .91
-    for _ in dates:
-        current *= 1 + random.uniform(-.022, .026)
-        prices.append(current)
-    fig = go.Figure(go.Scatter(x=dates, y=prices, mode="lines", line=dict(color=ACCENT, width=2.5), fill="tozeroy", fillcolor="rgba(43,212,164,.13)"))
+RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading historical NSE bhavcopy data…")
+def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
+    """Fetch consecutive max-three-month Bhavcopy chunks through the NSE MCP."""
+    collected, end_date = [], "today"
+    remaining = months_needed
+    while remaining > 0:
+        chunk = min(3, remaining)
+        response = call_nse_tool("get_stock_history", {"symbol": symbol, "months": chunk, "endDate": end_date}, BHAVCOPY_URL)
+        collected.extend(response.get("data", []))
+        end_date = response.get("next_end_date")
+        if not end_date:
+            break
+        remaining -= chunk
+    history = pd.DataFrame(collected).drop_duplicates(subset="date").sort_values("date")
+    if history.empty:
+        raise RuntimeError(f"No Bhavcopy history is available for {symbol}.")
+    history["date"] = pd.to_datetime(history["date"])
+    return history
+
+
+def price_chart(history: pd.DataFrame, candle: bool = False):
+    if candle:
+        trace = go.Candlestick(x=history["date"], open=history["open"], high=history["high"], low=history["low"], close=history["close"], increasing_line_color=GREEN, decreasing_line_color=RED)
+    else:
+        trace = go.Scatter(x=history["date"], y=history["close"], mode="lines", line=dict(color=ACCENT, width=2.5), fill="tozeroy", fillcolor="rgba(43,212,164,.13)")
+    fig = go.Figure(trace)
     fig.update_layout(height=340, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, color=MUTED), yaxis=dict(gridcolor="#202932", color=MUTED), showlegend=False)
+    fig.update_xaxes(rangeslider_visible=False)
     return fig
 
 
@@ -86,43 +101,47 @@ def gain(value: float) -> str:
     return f"<span class='{ 'gain' if value >= 0 else 'loss' }'>{value:+.2f}%</span>"
 
 
-def dashboard(data: pd.DataFrame):
+def dashboard(data: pd.DataFrame, updated: str):
     st.markdown("""<div class='topbar'>
       <div><span class='brand'>Investor<b>Paisa</b></span><span class='small-note' style='margin-left:.7rem'>Your calm market desk</span></div>
-      <div class='market-pill'><span class='live-dot'></span>Market closed · Last updated 16:10 IST</div>
+      <div class='market-pill'><span class='live-dot'></span>NSE MCP · {updated[:19].replace('T', ' ')}</div>
     </div>""", unsafe_allow_html=True)
     st.markdown("<section class='hero'><div class='eyebrow'>Market desk · Nifty 200</div><h1>the market,<br><span class='glow'>minus the noise.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on breadth, leadership and momentum—without the clutter.</p></section>", unsafe_allow_html=True)
     st.write("")
+    advances = int((data["Change %"] > 0).sum())
+    declines = int((data["Change %"] < 0).sum())
     a, b, c, d = st.columns(4)
-    a.metric("NIFTY 50", "22,776.10", "+0.98%")
-    b.metric("Advance / decline", "141 / 57", "71% advancing")
-    c.metric("Nifty 200 above 50D", "126", "+8 today")
-    d.metric("Market status", "Closed", "6 Oct 2026")
+    a.metric("Live universe", f"{len(data)} stocks", "NSE CM MCP")
+    b.metric("Advance / decline", f"{advances} / {declines}", f"{advances / len(data):.0%} advancing")
+    c.metric("Average daily move", f"{data['Change %'].mean():+.2f}%", "across universe")
+    d.metric("Above previous close", f"{advances}", "live snapshot")
     left, right = st.columns([1.55, 1])
     with left:
-        st.markdown("<div class='panel-title'>NIFTY 50</div><div class='panel-subtitle'>90-day price action · illustrative data</div>", unsafe_allow_html=True)
-        st.plotly_chart(price_chart("RELIANCE"), use_container_width=True, config={"displayModeBar": False})
+        symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
+        history = stock_history(symbol, 3)
+        st.markdown(f"<div class='panel-title'>{symbol}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
+        st.plotly_chart(price_chart(history), use_container_width=True, config={"displayModeBar": False})
     with right:
         st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div><br>", unsafe_allow_html=True)
         for _, row in data.sort_values("Change %", ascending=False).head(5).iterrows():
             strength = min(abs(row['Change %']) / 13 * 100, 100)
             color = "#2bd4a4" if row['Change %'] >= 0 else "#ff6b6b"
-            st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['Sector']} · ₹{row['Price']:,.2f}</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['series']} · ₹{row['Price']:,.2f} · {row['Volume']:,.0f} shares</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
         st.caption("Illustrative market snapshot. Not investment advice.")
 
 
 def screener(data: pd.DataFrame):
     st.header("Screener")
     x, y, z = st.columns(3)
-    sector = x.selectbox("Sector", ["All"] + sorted(data.Sector.unique().tolist()))
+    series = x.selectbox("Series", ["All"] + sorted(data.series.dropna().unique().tolist()))
     move = y.selectbox("Daily move", ["Any", "Gainers", "Losers"])
     query = z.text_input("Search symbol")
     result = data.copy()
-    if sector != "All": result = result[result.Sector == sector]
+    if series != "All": result = result[result.series == series]
     if move == "Gainers": result = result[result["Change %"] > 0]
     if move == "Losers": result = result[result["Change %"] < 0]
     if query: result = result[result.Symbol.str.contains(query.upper())]
-    shown = result.copy()
+    shown = result[["Symbol", "series", "Price", "Change %", "30D %", "Volume", "52W High", "52W Low"]].copy()
     shown["Price"] = shown.Price.map(lambda n: f"₹{n:,.2f}")
     shown["Change %"] = shown["Change %"].map(lambda n: f"{n:+.2f}%")
     st.dataframe(shown, use_container_width=True, hide_index=True)
@@ -131,17 +150,23 @@ def screener(data: pd.DataFrame):
 
 def charts(data: pd.DataFrame):
     st.header("Charts")
-    symbol = st.selectbox("Symbol", data.Symbol.tolist(), index=5)
+    symbol = st.selectbox("Symbol", data.Symbol.tolist())
+    range_label = st.radio("Range", list(RANGES), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
     st.markdown(f"### {symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}", unsafe_allow_html=True)
-    st.plotly_chart(price_chart(symbol), use_container_width=True, config={"displayModeBar": False})
-    st.info("This screen is for exploring layout and MCP-powered data plumbing, not trading advice.")
+    history = stock_history(symbol, RANGES[range_label])
+    if range_label == "1D":
+        history = history.tail(1)
+    elif range_label == "1W":
+        history = history.tail(5)
+    st.plotly_chart(price_chart(history, candle=range_label in {"1D", "1W", "1M"}), use_container_width=True, config={"displayModeBar": False})
+    st.caption(f"{len(history)} NSE Bhavcopy observations · {history.date.min():%d %b %Y} to {history.date.max():%d %b %Y}")
 
 
 def watchlist(data: pd.DataFrame):
     st.header("Watchlist")
     st.write("A quiet place for the names you want to follow.")
-    selected = st.multiselect("Your list", data.Symbol.tolist(), default=["RELIANCE", "HDFCBANK", "INFY"])
+    selected = st.multiselect("Your list", data.Symbol.tolist(), default=data.Symbol.head(3).tolist())
     st.dataframe(data[data.Symbol.isin(selected)], use_container_width=True, hide_index=True)
 
 
@@ -155,40 +180,18 @@ def news():
         st.markdown(f"<div class='feed'><b>{title}</b><br><span class='small-note'>{source} · {time}</span></div>", unsafe_allow_html=True)
 
 
-def mcp_lab():
-    st.header("NSE MCP lab")
-    st.write("Connect this Streamlit dashboard to NSE’s official public MCP endpoints. The response is shown raw so you can learn the tool contract before styling it into a screen.")
-    source = st.radio("Official NSE source", ["CM market (current market data)", "Bhavcopy (historical EOD data)"], horizontal=True)
-    endpoint = CM_MARKET_URL if source.startswith("CM market") else BHAVCOPY_URL
-    st.code(endpoint, language="text")
-    if st.button("Discover available NSE tools"):
-        try:
-            st.session_state["tools"] = list_tools(endpoint)
-            st.session_state["tools_endpoint"] = endpoint
-            st.success(f"Connected — found {len(st.session_state['tools'])} tools.")
-        except Exception as error:
-            st.error(f"Could not reach NSE MCP: {error}")
-    tools = st.session_state.get("tools", []) if st.session_state.get("tools_endpoint") == endpoint else []
-    if tools:
-        tool = st.selectbox("Tool", tools)
-        arguments = st.text_area("Arguments (JSON)", value="{}")
-        if st.button("Run MCP tool"):
-            import json
-            try:
-                st.json(call_nse_tool(tool, json.loads(arguments), endpoint))
-            except Exception as error:
-                st.error(f"MCP request failed: {error}")
-    st.caption("The NSE server returns raw exchange data. Validate fields, cache responsibly, and keep this educational—not a trade-execution workflow.")
-
-
 inject_css()
-data = demo_universe()
+try:
+    data, updated = live_universe()
+except Exception as error:
+    st.error(f"NSE data could not be loaded: {error}")
+    st.stop()
 with st.sidebar:
     st.markdown("<div class='brand'>Investor<b>Paisa</b></div><p class='small-note'>Streamlit recreation</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News", "NSE MCP lab"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
-    st.success("Demo snapshot ready")
-    st.caption("Use NSE MCP lab to discover and call the live source.")
+    st.success("Live NSE MCP data")
+    st.caption("200 CM equities · Bhavcopy chart history")
 
-{"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news, "NSE MCP lab": mcp_lab}[page](data) if page not in ("News", "NSE MCP lab") else {"News": news, "NSE MCP lab": mcp_lab}[page]()
+{"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()
