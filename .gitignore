@@ -1,0 +1,15 @@
+# Python and Streamlit runtime files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Local Streamlit secrets must never be committed
+.streamlit/secrets.toml
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
