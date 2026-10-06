@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
@@ -55,16 +58,37 @@ def inject_css():
     """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=600, show_spinner="Loading 200 live NSE equities…")
+NIFTY_200_CONSTITUENTS_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def nifty_200_constituents() -> pd.DataFrame:
+    """Download the official Nifty 200 constituent list, refreshed daily."""
+    request = Request(NIFTY_200_CONSTITUENTS_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=20) as response:
+        constituents = pd.read_csv(StringIO(response.read().decode("utf-8-sig")))
+    return constituents.rename(columns={"Company Name": "Company", "Industry": "Industry", "Symbol": "Symbol"})
+
+
+@st.cache_data(ttl=600, show_spinner="Loading official Nifty 200 data from NSE MCP…")
 def live_universe() -> tuple[pd.DataFrame, str]:
-    """Load a 200-stock live universe directly from NSE's CM MCP server."""
-    response = call_nse_tool("cm_get_equity_stocks", {"limit": 200, "symbolFilter": ""})
-    rows = response.get("stocks", [])
-    frame = pd.DataFrame(rows)
-    if frame.empty:
-        raise RuntimeError("NSE MCP returned no equity rows.")
-    frame = frame.rename(columns={"symbol": "Symbol", "lastTradedPrice": "Price", "perChange": "Change %", "perChange30d": "30D %", "volume": "Volume", "fiftyTwoWeekHigh": "52W High", "fiftyTwoWeekLow": "52W Low"})
-    return frame, response.get("updatedAt", "NSE MCP")
+    """Quote every official Nifty 200 constituent through Bhavcopy MCP batches."""
+    constituents = nifty_200_constituents()
+    symbols = constituents["Symbol"].dropna().tolist()
+    batches = [symbols[index:index + 50] for index in range(0, len(symbols), 50)]
+
+    def load_batch(batch: list[str]) -> dict:
+        return call_nse_tool("get_bulk_quote", {"symbols": batch}, BHAVCOPY_URL)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(executor.map(load_batch, batches))
+    quotes = pd.DataFrame([quote for response in responses for quote in response.get("quotes", [])])
+    if quotes.empty:
+        raise RuntimeError("NSE MCP returned no Nifty 200 quotes.")
+    frame = constituents.merge(quotes, on="Symbol", how="inner")
+    frame = frame.rename(columns={"close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
+    updated = str(frame["date"].iloc[0]) if "date" in frame else "NSE Bhavcopy"
+    return frame, updated
 
 
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
@@ -111,14 +135,14 @@ def gain(value: float) -> str:
 def dashboard(data: pd.DataFrame, updated: str):
     st.markdown("""<div class='topbar'>
       <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
-      <div class='market-pill'><span class='live-dot'></span>NSE MCP · {updated[:19].replace('T', ' ')}</div>
+      <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated}</div>
     </div>""", unsafe_allow_html=True)
-    st.markdown("<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on breadth, leadership and momentum—built for clearer market decisions.</p></section>", unsafe_allow_html=True)
+    st.markdown("<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p></section>", unsafe_allow_html=True)
     st.write("")
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
     a, b, c, d = st.columns(4)
-    a.metric("Live universe", f"{len(data)} stocks", "NSE CM MCP")
+    a.metric("Nifty 200 universe", f"{len(data)} stocks", "official constituents")
     b.metric("Advance / decline", f"{advances} / {declines}", f"{advances / len(data):.0%} advancing")
     c.metric("Average daily move", f"{data['Change %'].mean():+.2f}%", "across universe")
     d.metric("Above previous close", f"{advances}", "live snapshot")
@@ -133,22 +157,22 @@ def dashboard(data: pd.DataFrame, updated: str):
         for _, row in data.sort_values("Change %", ascending=False).head(5).iterrows():
             strength = min(abs(row['Change %']) / 13 * 100, 100)
             color = "#2bd4a4" if row['Change %'] >= 0 else "#ff6b6b"
-            st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['series']} · ₹{row['Price']:,.2f} · {row['Volume']:,.0f} shares</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['Industry']} · ₹{row['Price']:,.2f} · {row['Volume']:,.0f} shares</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
         st.caption("Illustrative market snapshot. Not investment advice.")
 
 
 def screener(data: pd.DataFrame):
     st.header("Screener")
     x, y, z = st.columns(3)
-    series = x.selectbox("Series", ["All"] + sorted(data.series.dropna().unique().tolist()))
+    industry = x.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
     move = y.selectbox("Daily move", ["Any", "Gainers", "Losers"])
     query = z.text_input("Search symbol")
     result = data.copy()
-    if series != "All": result = result[result.series == series]
+    if industry != "All": result = result[result.Industry == industry]
     if move == "Gainers": result = result[result["Change %"] > 0]
     if move == "Losers": result = result[result["Change %"] < 0]
     if query: result = result[result.Symbol.str.contains(query.upper())]
-    shown = result[["Symbol", "series", "Price", "Change %", "30D %", "Volume", "52W High", "52W Low"]].copy()
+    shown = result[["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Day High", "Day Low"]].copy()
     shown["Price"] = shown.Price.map(lambda n: f"₹{n:,.2f}")
     shown["Change %"] = shown["Change %"].map(lambda n: f"{n:+.2f}%")
     st.dataframe(shown, use_container_width=True, hide_index=True)
@@ -200,6 +224,6 @@ with st.sidebar:
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     st.success("Live NSE MCP data")
-    st.caption("200 CM equities · Bhavcopy chart history")
+    st.caption("Official Nifty 200 constituents · Bhavcopy data")
 
 {"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()
