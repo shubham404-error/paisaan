@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
+import altair as alt
 
 from nse_mcp import BHAVCOPY_URL, call_nse_tool
 
-st.set_page_config(page_title="InvestorPaisa · Streamlit", page_icon="◒", layout="wide")
+st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
 ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
 
@@ -86,15 +86,18 @@ def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
     return history
 
 
-def price_chart(history: pd.DataFrame, candle: bool = False):
+def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False):
+    """Fast Vega-Lite market chart; older history is downsampled before render."""
+    view = history.copy()
+    if long_range and len(view) > 260:
+        view = view.set_index("date").resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
+    base = alt.Chart(view).encode(x=alt.X("date:T", title=None, axis=alt.Axis(grid=False, labelColor=MUTED)), tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("open:Q", title="Open", format=".2f"), alt.Tooltip("high:Q", title="High", format=".2f"), alt.Tooltip("low:Q", title="Low", format=".2f"), alt.Tooltip("close:Q", title="Close", format=".2f")])
     if candle:
-        trace = go.Candlestick(x=history["date"], open=history["open"], high=history["high"], low=history["low"], close=history["close"], increasing_line_color=GREEN, decreasing_line_color=RED)
+        color = alt.condition("datum.open <= datum.close", alt.value(GREEN), alt.value(RED))
+        chart = base.mark_rule().encode(y=alt.Y("low:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)), y2="high:Q", color=color) + base.mark_bar(size=7).encode(y="open:Q", y2="close:Q", color=color)
     else:
-        trace = go.Scatter(x=history["date"], y=history["close"], mode="lines", line=dict(color=ACCENT, width=2.5), fill="tozeroy", fillcolor="rgba(43,212,164,.13)")
-    fig = go.Figure(trace)
-    fig.update_layout(height=340, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(showgrid=False, color=MUTED), yaxis=dict(gridcolor="#202932", color=MUTED), showlegend=False)
-    fig.update_xaxes(rangeslider_visible=False)
-    return fig
+        chart = base.mark_area(line={"color": ACCENT, "strokeWidth": 2.5}, color=alt.Gradient(gradient="linear", stops=[alt.GradientStop(color="rgba(43,212,164,.22)", offset=0), alt.GradientStop(color="rgba(43,212,164,0)", offset=1)], x1=1, x2=1, y1=1, y2=0)).encode(y=alt.Y("close:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)))
+    return chart.properties(height=340).configure_view(strokeOpacity=0).configure_axis(domain=False, tickColor="#202932")
 
 
 def gain(value: float) -> str:
@@ -103,10 +106,10 @@ def gain(value: float) -> str:
 
 def dashboard(data: pd.DataFrame, updated: str):
     st.markdown("""<div class='topbar'>
-      <div><span class='brand'>Investor<b>Paisa</b></span><span class='small-note' style='margin-left:.7rem'>Your calm market desk</span></div>
+      <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
       <div class='market-pill'><span class='live-dot'></span>NSE MCP · {updated[:19].replace('T', ' ')}</div>
     </div>""", unsafe_allow_html=True)
-    st.markdown("<section class='hero'><div class='eyebrow'>Market desk · Nifty 200</div><h1>the market,<br><span class='glow'>minus the noise.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on breadth, leadership and momentum—without the clutter.</p></section>", unsafe_allow_html=True)
+    st.markdown("<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on breadth, leadership and momentum—built for clearer market decisions.</p></section>", unsafe_allow_html=True)
     st.write("")
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
@@ -120,7 +123,7 @@ def dashboard(data: pd.DataFrame, updated: str):
         symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
         history = stock_history(symbol, 3)
         st.markdown(f"<div class='panel-title'>{symbol}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
-        st.plotly_chart(price_chart(history), use_container_width=True, config={"displayModeBar": False})
+        st.altair_chart(display_chart(history, candle=False), use_container_width=True)
     with right:
         st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div><br>", unsafe_allow_html=True)
         for _, row in data.sort_values("Change %", ascending=False).head(5).iterrows():
@@ -159,7 +162,7 @@ def charts(data: pd.DataFrame):
         history = history.tail(1)
     elif range_label == "1W":
         history = history.tail(5)
-    st.plotly_chart(price_chart(history, candle=range_label in {"1D", "1W", "1M"}), use_container_width=True, config={"displayModeBar": False})
+    st.altair_chart(display_chart(history, candle=range_label in {"1D", "1W", "1M"}, long_range=range_label in {"1Y", "3Y"}), use_container_width=True)
     st.caption(f"{len(history)} NSE Bhavcopy observations · {history.date.min():%d %b %Y} to {history.date.max():%d %b %Y}")
 
 
@@ -187,7 +190,7 @@ except Exception as error:
     st.error(f"NSE data could not be loaded: {error}")
     st.stop()
 with st.sidebar:
-    st.markdown("<div class='brand'>Investor<b>Paisa</b></div><p class='small-note'>Streamlit recreation</p>", unsafe_allow_html=True)
+    st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)

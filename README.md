@@ -1,6 +1,6 @@
-# InvestorPaisa-style Streamlit desk
+# paisaan · CapitalSense Advisors
 
-A hands-on Streamlit recreation of the visual patterns in InvestorPaisa: a calm dark market dashboard, screener, chart, watchlist and news screens. Live market data is loaded directly through NSE's official CM-market MCP, and historical charts are loaded through NSE's official Bhavcopy MCP.
+A standalone CapitalSense Advisors market desk, built around the **paisaan** meme. It includes a calm dark dashboard, screener, high-performance historical charts, watchlist and news screens. Live market data is loaded directly through NSE's official CM-market MCP, and historical charts are loaded through NSE's official Bhavcopy MCP.
 
 ## Run it
 
