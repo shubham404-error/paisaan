@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
-from io import StringIO
-from urllib.request import Request, urlopen
+import os
 
+import httpx
 import pandas as pd
 import streamlit as st
 import altair as alt
-
-from nse_mcp import BHAVCOPY_URL, call_nse_tool
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
@@ -58,37 +54,19 @@ def inject_css():
     """, unsafe_allow_html=True)
 
 
-NIFTY_200_CONSTITUENTS_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def nifty_200_constituents() -> pd.DataFrame:
-    """Download the official Nifty 200 constituent list, refreshed daily."""
-    request = Request(NIFTY_200_CONSTITUENTS_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(request, timeout=20) as response:
-        constituents = pd.read_csv(StringIO(response.read().decode("utf-8-sig")))
-    return constituents.rename(columns={"Company Name": "Company", "Industry": "Industry", "Symbol": "Symbol"})
+API_BASE_URL = os.getenv("STREAMLIT_API_BASE_URL", "http://localhost:8000")
 
 
 @st.cache_data(ttl=600, show_spinner="Loading official Nifty 200 data from NSE MCP…")
 def live_universe() -> tuple[pd.DataFrame, str]:
-    """Quote every official Nifty 200 constituent through Bhavcopy MCP batches."""
-    constituents = nifty_200_constituents()
-    symbols = constituents["Symbol"].dropna().tolist()
-    batches = [symbols[index:index + 50] for index in range(0, len(symbols), 50)]
-
-    def load_batch(batch: list[str]) -> dict:
-        return call_nse_tool("get_bulk_quote", {"symbols": batch}, BHAVCOPY_URL)
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        responses = list(executor.map(load_batch, batches))
-    quotes = pd.DataFrame([quote for response in responses for quote in response.get("quotes", [])])
-    if quotes.empty:
-        raise RuntimeError("NSE MCP returned no Nifty 200 quotes.")
-    frame = constituents.merge(quotes, on="Symbol", how="inner")
-    frame = frame.rename(columns={"close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
-    updated = str(frame["date"].iloc[0]) if "date" in frame else "NSE Bhavcopy"
-    return frame, updated
+    """Read market data from the API; the UI never calls NSE MCP directly."""
+    response = httpx.get(f"{API_BASE_URL}/v1/market/overview", params={"index": "NIFTY200"}, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+    frame = pd.DataFrame(payload["constituents"]).rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
+    if frame.empty:
+        raise RuntimeError("The API returned no Nifty 200 rows.")
+    return frame, payload.get("as_of", "unknown")
 
 
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
@@ -96,18 +74,11 @@ RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
 
 @st.cache_data(ttl=3600, show_spinner="Loading historical NSE bhavcopy data…")
 def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
-    """Fetch consecutive max-three-month Bhavcopy chunks through the NSE MCP."""
-    collected, end_date = [], "today"
-    remaining = months_needed
-    while remaining > 0:
-        chunk = min(3, remaining)
-        response = call_nse_tool("get_stock_history", {"symbol": symbol, "months": chunk, "endDate": end_date}, BHAVCOPY_URL)
-        collected.extend(response.get("data", []))
-        end_date = response.get("next_end_date")
-        if not end_date:
-            break
-        remaining -= chunk
-    history = pd.DataFrame(collected).drop_duplicates(subset="date").sort_values("date")
+    """Read chart bars from the API; backend handles source access and caching."""
+    range_for_months = {1: "1M", 3: "3M", 6: "6M", 12: "1Y", 36: "3Y"}
+    response = httpx.get(f"{API_BASE_URL}/v1/stocks/{symbol}/bars", params={"range": range_for_months[months_needed]}, timeout=45)
+    response.raise_for_status()
+    history = pd.DataFrame(response.json()["bars"]).drop_duplicates(subset="date").sort_values("date")
     if history.empty:
         raise RuntimeError(f"No Bhavcopy history is available for {symbol}.")
     history["date"] = pd.to_datetime(history["date"])
@@ -223,7 +194,7 @@ with st.sidebar:
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
-    st.success("Live NSE MCP data")
-    st.caption("Official Nifty 200 constituents · Bhavcopy data")
+    st.success("Live market API")
+    st.caption("Official Nifty 200 constituents · cached server data")
 
 {"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()
