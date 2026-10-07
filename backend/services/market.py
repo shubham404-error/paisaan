@@ -8,7 +8,7 @@ from backend.core.cache import cache
 from backend.core.config import get_settings
 from backend.data.nse_provider import fetch_constituents, fetch_history, fetch_nifty_200_quotes
 from backend.db.database import SessionLocal
-from backend.db.models import DailyBar, IndexMembership, Instrument
+from backend.db.models import DailyBar, IndexMembership, Instrument, SectorDailyMetric, TechnicalSnapshot
 
 
 def overview() -> dict:
@@ -87,3 +87,37 @@ def _persisted_bars(symbol: str) -> list[dict]:
             return []
         bars = session.scalars(select(DailyBar).where(DailyBar.instrument_id == instrument.id).order_by(DailyBar.trading_date)).all()
         return [{"date": bar.trading_date.isoformat(), "open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close, "ltp": bar.close, "volume": bar.volume} for bar in bars]
+
+
+def sectors() -> dict:
+    with SessionLocal() as session:
+        latest_date = session.scalar(select(func.max(SectorDailyMetric.trading_date)))
+        if not latest_date:
+            return {"as_of": None, "sectors": []}
+        rows = session.scalars(select(SectorDailyMetric).where(SectorDailyMetric.trading_date == latest_date, SectorDailyMetric.index_code == "NIFTY200").order_by(SectorDailyMetric.average_change_pct.desc())).all()
+        return {"as_of": latest_date.isoformat(), "sectors": [{"industry": row.industry, "members": row.members, "advancers": row.advancers, "decliners": row.decliners, "average_change_pct": row.average_change_pct, "turnover": row.turnover} for row in rows]}
+
+
+def screen(industry: str | None = None, min_rsi: float | None = None, min_volume_ratio: float | None = None, above_sma50: bool | None = None, min_return_1m: float | None = None, limit: int = 200) -> dict:
+    with SessionLocal() as session:
+        latest_date = session.scalar(select(func.max(TechnicalSnapshot.trading_date)))
+        if not latest_date:
+            return {"as_of": None, "total": 0, "matches": []}
+        statement = (select(Instrument, DailyBar, TechnicalSnapshot)
+                     .join(DailyBar, DailyBar.instrument_id == Instrument.id)
+                     .join(TechnicalSnapshot, TechnicalSnapshot.instrument_id == Instrument.id)
+                     .join(IndexMembership, IndexMembership.instrument_id == Instrument.id)
+                     .where(DailyBar.trading_date == latest_date, TechnicalSnapshot.trading_date == latest_date, IndexMembership.index_code == "NIFTY200", IndexMembership.effective_to.is_(None)))
+        if industry:
+            statement = statement.where(Instrument.industry == industry)
+        if min_rsi is not None:
+            statement = statement.where(TechnicalSnapshot.rsi14 >= min_rsi)
+        if min_volume_ratio is not None:
+            statement = statement.where(TechnicalSnapshot.volume_ratio_20d >= min_volume_ratio)
+        if min_return_1m is not None:
+            statement = statement.where(TechnicalSnapshot.return_1m >= min_return_1m)
+        if above_sma50:
+            statement = statement.where(DailyBar.close > TechnicalSnapshot.sma50)
+        rows = session.execute(statement.order_by(TechnicalSnapshot.return_1m.desc().nullslast()).limit(min(limit, 200))).all()
+        matches = [{"symbol": instrument.symbol, "company": instrument.company_name, "industry": instrument.industry, "close": bar.close, "rsi14": technical.rsi14, "sma50": technical.sma50, "sma200": technical.sma200, "volume_ratio_20d": technical.volume_ratio_20d, "return_1m": technical.return_1m, "return_1y": technical.return_1y} for instrument, bar, technical in rows]
+        return {"as_of": latest_date.isoformat(), "total": len(matches), "matches": matches}

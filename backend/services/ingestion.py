@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.data.nse_provider import fetch_constituents, fetch_history, fetch_nifty_200_quotes
 from backend.core.cache import cache
-from backend.db.models import DailyBar, IndexMembership, IngestionRun, Instrument, TechnicalSnapshot
+from backend.db.models import DailyBar, IndexMembership, IngestionRun, Instrument, SectorDailyMetric, TechnicalSnapshot
 
 INDEX_CODE = "NIFTY200"
 
@@ -125,6 +125,37 @@ def calculate_latest_technicals(session: Session, symbol: str) -> dict:
         session.add(TechnicalSnapshot(instrument_id=instrument.id, trading_date=latest.date, **values))
     session.commit()
     return {"symbol": symbol, "as_of": latest.date.isoformat(), **values}
+
+
+def calculate_sector_metrics(session: Session, trading_date: date | None = None) -> int:
+    """Persist equal-weighted sector breadth and turnover for the active universe."""
+    as_of = trading_date or session.scalar(select(DailyBar.trading_date).order_by(DailyBar.trading_date.desc()).limit(1))
+    if not as_of:
+        return 0
+    statement = (select(DailyBar, Instrument)
+                 .join(Instrument, Instrument.id == DailyBar.instrument_id)
+                 .join(IndexMembership, IndexMembership.instrument_id == Instrument.id)
+                 .where(DailyBar.trading_date == as_of, IndexMembership.index_code == INDEX_CODE, IndexMembership.effective_to.is_(None)))
+    rows = list(session.execute(statement))
+    grouped: dict[str, list[tuple[DailyBar, Instrument]]] = {}
+    for bar, instrument in rows:
+        grouped.setdefault(instrument.industry or "Unclassified", []).append((bar, instrument))
+    for industry, sector_rows in grouped.items():
+        changes, turnover = [], 0.0
+        for bar, instrument in sector_rows:
+            previous = session.scalar(select(DailyBar.close).where(DailyBar.instrument_id == instrument.id, DailyBar.trading_date < as_of).order_by(DailyBar.trading_date.desc()).limit(1))
+            change = ((bar.close / previous) - 1) * 100 if previous else 0.0
+            changes.append(change)
+            turnover += bar.turnover if bar.turnover is not None else bar.close * bar.volume
+        metric = session.scalar(select(SectorDailyMetric).where(SectorDailyMetric.index_code == INDEX_CODE, SectorDailyMetric.industry == industry, SectorDailyMetric.trading_date == as_of))
+        values = {"members": len(sector_rows), "advancers": sum(change > 0 for change in changes), "decliners": sum(change < 0 for change in changes), "average_change_pct": round(sum(changes) / len(changes), 4), "turnover": turnover}
+        if metric:
+            for field, value in values.items():
+                setattr(metric, field, value)
+        else:
+            session.add(SectorDailyMetric(index_code=INDEX_CODE, industry=industry, trading_date=as_of, **values))
+    session.commit()
+    return len(grouped)
 
 
 def _value(value: float) -> float | None:

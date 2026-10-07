@@ -8,6 +8,11 @@ uvicorn backend.api.main:app --reload --port 8000
 
 The Streamlit UI consumes `GET /v1/market/overview` and `GET /v1/stocks/{symbol}/bars`. NSE MCP access is confined to `backend/data/nse_provider.py`.
 
+Additional persisted-data endpoints:
+
+- `GET /v1/sectors` - latest Nifty 200 sector breadth and turnover.
+- `GET /v1/screener?industry=Healthcare&min_rsi=55&above_sma50=true` - safe, indexed technical filters.
+
 For production, set `DATABASE_URL` to PostgreSQL/TimescaleDB and `REDIS_URL` to a managed Redis instance. Use a scheduler to invoke `backend.worker.tasks.ingest_nifty_200_market_close` after each market close.
 
 ## First data load

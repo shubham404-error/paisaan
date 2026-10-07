@@ -57,6 +57,20 @@ class TechnicalSnapshot(Base):
     return_1y: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class SectorDailyMetric(Base):
+    __tablename__ = "sector_daily_metrics"
+    __table_args__ = (UniqueConstraint("index_code", "industry", "trading_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    index_code: Mapped[str] = mapped_column(String(24), index=True)
+    industry: Mapped[str] = mapped_column(String(128), index=True)
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    members: Mapped[int] = mapped_column(Integer)
+    advancers: Mapped[int] = mapped_column(Integer)
+    decliners: Mapped[int] = mapped_column(Integer)
+    average_change_pct: Mapped[float] = mapped_column(Float)
+    turnover: Mapped[float] = mapped_column(Float)
+
+
 class IngestionRun(Base):
     __tablename__ = "ingestion_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
