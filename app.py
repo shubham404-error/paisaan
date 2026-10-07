@@ -25,6 +25,7 @@ def inject_css():
       .topbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding: .35rem 0 1.2rem; }
       .live-dot { display:inline-block; width:7px; height:7px; border-radius:999px; background:#2bd4a4; box-shadow: 0 0 0 5px rgba(43,212,164,.12); margin-right:.5rem; }
       .market-pill { border:1px solid #23323a; background:rgba(13,23,27,.76); padding:.45rem .75rem; border-radius:999px; color:#b9c3ce; font-size:.78rem; }
+      .source-note { color:#73808f; font-size:.72rem; margin:.5rem 0 1.1rem; }
       .hero { padding: 2.3rem 2.5rem; border: 1px solid #29423e; border-radius: 22px;
               background: linear-gradient(120deg, rgba(17,31,35,.96), rgba(12,18,26,.82)); box-shadow: 0 18px 50px rgba(0,0,0,.16); }
       .hero h1 { font-size: clamp(2.2rem, 4vw, 4.25rem); letter-spacing: -.065em; line-height: .95; margin: .5rem 0; }
@@ -42,6 +43,11 @@ def inject_css():
       .feed:hover { background:rgba(43,212,164,.07); border-color:#315448; transform:translateY(-1px); }
       .move-bar { height:5px; border-radius:99px; background:#202a33; overflow:hidden; margin-top:.55rem; }
       .move-fill { height:100%; border-radius:99px; background:linear-gradient(90deg, #2bd4a4, #7cf0ff); }
+      .section-title { font-size:1.08rem; font-weight:680; letter-spacing:-.025em; margin:1.4rem 0 .18rem; }
+      .section-copy { color:#8390a0; font-size:.8rem; margin:0 0 .75rem; }
+      .sector-chip { display:inline-flex; align-items:center; gap:.45rem; padding:.45rem .62rem; margin:0 .35rem .35rem 0; border:1px solid #25313a; background:#10171e; border-radius:10px; font-size:.78rem; }
+      .sector-dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
+      .sentiment { border-left:3px solid #2bd4a4; background:rgba(43,212,164,.06); border-radius:0 12px 12px 0; padding:.75rem .9rem; margin:1rem 0 .2rem; color:#c8d1da; font-size:.9rem; }
       .small-note { color: #8d98a7; font-size: .78rem; }
       .stButton button { border-radius: 999px; border-color: #315448; font-weight:600; }
       .stDataFrame { border:1px solid #242d37; border-radius:14px; overflow:hidden; }
@@ -103,13 +109,32 @@ def gain(value: float) -> str:
     return f"<span class='{ 'gain' if value >= 0 else 'loss' }'>{value:+.2f}%</span>"
 
 
+def market_summary(data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Derive transparent equal-weight sector observations from the API snapshot."""
+    enriched = data.assign(Turnover=data["Price"] * data["Volume"])
+    sectors = (enriched.groupby("Industry", dropna=False)
+               .agg(Members=("Symbol", "size"), Average_change=("Change %", "mean"), Advances=("Change %", lambda values: int((values > 0).sum())), Declines=("Change %", lambda values: int((values < 0).sum())), Turnover=("Turnover", "sum"))
+               .reset_index()
+               .sort_values("Average_change", ascending=False))
+    leader, laggard = sectors.iloc[0], sectors.iloc[-1]
+    summary = f"{leader.Industry} leads the Nifty 200 universe ({leader.Average_change:+.2f}% equal-weight); {laggard.Industry} trails ({laggard.Average_change:+.2f}%)."
+    return sectors, summary
+
+
+def mover_row(row: pd.Series) -> None:
+    strength = min(abs(row["Change %"]) / 8 * 100, 100)
+    color = GREEN if row["Change %"] >= 0 else RED
+    st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['Company']} · ₹{row['Price']:,.2f}</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
+
+
 def dashboard(data: pd.DataFrame, updated: str):
-    st.markdown("""<div class='topbar'>
+    sectors, sentiment = market_summary(data)
+    st.markdown(f"""<div class='topbar'>
       <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated}</div>
     </div>""", unsafe_allow_html=True)
-    st.markdown("<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p></section>", unsafe_allow_html=True)
-    st.write("")
+    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p><div class='sentiment'>{sentiment}</div></section>", unsafe_allow_html=True)
+    st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
     a, b, c, d = st.columns(4)
@@ -117,19 +142,32 @@ def dashboard(data: pd.DataFrame, updated: str):
     b.metric("Advance / decline", f"{advances} / {declines}", f"{advances / len(data):.0%} advancing")
     c.metric("Average daily move", f"{data['Change %'].mean():+.2f}%", "across universe")
     d.metric("Above previous close", f"{advances}", "live snapshot")
-    left, right = st.columns([1.55, 1])
+    left, right = st.columns([1.5, 1])
     with left:
         symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
         history = stock_history(symbol, 3)
         st.markdown(f"<div class='panel-title'>{symbol}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
         st.altair_chart(display_chart(history, candle=False), use_container_width=True)
     with right:
-        st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div><br>", unsafe_allow_html=True)
-        for _, row in data.sort_values("Change %", ascending=False).head(5).iterrows():
-            strength = min(abs(row['Change %']) / 13 * 100, 100)
-            color = "#2bd4a4" if row['Change %'] >= 0 else "#ff6b6b"
-            st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['Industry']} · ₹{row['Price']:,.2f} · {row['Volume']:,.0f} shares</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
-        st.caption("Illustrative market snapshot. Not investment advice.")
+        st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div>", unsafe_allow_html=True)
+        gainers, losers = st.tabs(["Top gainers", "Top losers"])
+        with gainers:
+            for _, row in data.nlargest(4, "Change %").iterrows():
+                mover_row(row)
+        with losers:
+            for _, row in data.nsmallest(4, "Change %").iterrows():
+                mover_row(row)
+
+    st.markdown("<div class='section-title'>Sector pulse</div><p class='section-copy'>Equal-weighted daily movement across the current Nifty 200 constituent set.</p>", unsafe_allow_html=True)
+    sector_cols = st.columns(4)
+    for column, (_, sector) in zip(sector_cols, sectors.head(4).iterrows()):
+        dot = GREEN if sector.Average_change >= 0 else RED
+        column.markdown(f"<div class='sector-chip'><i class='sector-dot' style='background:{dot}'></i><b>{sector.Industry}</b><span style='margin-left:auto'>{gain(sector.Average_change)}</span></div><div class='small-note'>{int(sector.Advances)} up · {int(sector.Declines)} down · {int(sector.Members)} stocks</div>", unsafe_allow_html=True)
+
+    shown_sectors = sectors[["Industry", "Members", "Average_change", "Advances", "Declines", "Turnover"]].copy()
+    shown_sectors["Average_change"] = shown_sectors["Average_change"].map(lambda value: f"{value:+.2f}%")
+    shown_sectors["Turnover"] = shown_sectors["Turnover"].map(lambda value: f"₹{value / 10_000_000:,.1f} Cr")
+    st.dataframe(shown_sectors, use_container_width=True, hide_index=True, column_config={"Average_change": "Average move"})
 
 
 def screener(data: pd.DataFrame):
@@ -147,7 +185,7 @@ def screener(data: pd.DataFrame):
     shown["Price"] = shown.Price.map(lambda n: f"₹{n:,.2f}")
     shown["Change %"] = shown["Change %"].map(lambda n: f"{n:+.2f}%")
     st.dataframe(shown, use_container_width=True, hide_index=True)
-    st.caption("Filters are local to this learning build. Feed live data through the NSE MCP panel in the sidebar.")
+    st.caption(f"{len(result)} of {len(data)} official Nifty 200 constituents match the selected filters.")
 
 
 def charts(data: pd.DataFrame):
