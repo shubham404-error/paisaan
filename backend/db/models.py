@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.db.database import Base
@@ -55,6 +55,17 @@ class TechnicalSnapshot(Base):
     volume_ratio_20d: Mapped[float | None] = mapped_column(Float, nullable=True)
     return_1m: Mapped[float | None] = mapped_column(Float, nullable=True)
     return_1y: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class IngestionRun(Base):
+    __tablename__ = "ingestion_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_name: Mapped[str] = mapped_column(String(80), index=True)
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Watchlist(Base):

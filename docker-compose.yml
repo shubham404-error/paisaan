@@ -26,6 +26,13 @@ services:
       DATABASE_URL: postgresql+psycopg://paisaan:change-me@postgres:5432/paisaan
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
+  scheduler:
+    build: .
+    command: celery -A backend.worker.celery_app beat --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+psycopg://paisaan:change-me@postgres:5432/paisaan
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [postgres, redis]
 
 volumes:
   postgres_data:
