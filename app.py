@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from html import escape
+import json
 import os
 
 import pandas as pd
 import streamlit as st
 
-from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, translate_screener_request
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -168,6 +169,131 @@ def yahoo_fundamentals(symbols: tuple[str, ...]) -> pd.DataFrame:
 
 def gain(value: float) -> str:
     return f"<span class='{ 'gain' if value >= 0 else 'loss' }'>{value:+.2f}%</span>"
+
+
+def json_records(frame: pd.DataFrame, columns: list[str], limit: int = 25) -> list[dict]:
+    """Create a JSON-safe, bounded fact packet for an optional AI request."""
+    available = [column for column in columns if column in frame.columns]
+    return json.loads(frame.loc[:, available].head(limit).to_json(orient="records", date_format="iso"))
+
+
+def open_chart_for(symbol: str) -> None:
+    st.session_state["page"] = "Charts"
+    st.session_state["chart_symbol"] = symbol
+
+
+def render_research_list(title: str, items: list[str]) -> None:
+    st.markdown(f"**{title}**")
+    for item in items:
+        st.markdown(f"- {safe_text(item)}")
+
+
+def screener_research_packet(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> dict:
+    fields = ["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Turnover (Cr)", "Day range %", "pe", "pb", "roe", "dividend_yield", "market_cap_cr"]
+    return {
+        "source": "NSE Bhavcopy EOD; optional Yahoo Finance fundamentals",
+        "as_of": as_of,
+        "screen": {"preset": preset, "ranked_by": rank_by, "match_count": len(result)},
+        "ranked_results": json_records(result, fields),
+    }
+
+
+def render_comparison(comparison: dict) -> None:
+    render_research_list("What these companies have in common", comparison["commonalities"])
+    render_research_list("Material differences", comparison["differences"])
+    render_research_list("Data gaps to resolve", comparison["data_gaps"])
+    st.markdown("**Due-diligence checks**")
+    for item in comparison["checks_by_symbol"]:
+        st.markdown(f"_{safe_text(item['symbol'])}_")
+        for check in item["checks"]:
+            st.markdown(f"- {safe_text(check)}")
+
+
+def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> None:
+    """Optional, session-only research actions for an already-populated screen."""
+    with st.expander("Build research plan", expanded=False):
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to enable the optional research workbench.")
+            return
+        facts = screener_research_packet(result, as_of, preset, rank_by)
+        context_id = str(abs(hash((as_of, preset, rank_by, tuple(item["Symbol"] for item in facts["ranked_results"])))))
+        shortlist_tab, compare_tab = st.tabs(["AI shortlist", "Compare selected"])
+        with shortlist_tab:
+            st.caption("Creates up to three research candidates from the displayed ranked results. It does not make investment recommendations.")
+            shortlist_key = f"research-shortlist:{context_id}"
+            if st.button("Build AI shortlist", key=f"build-shortlist:{context_id}"):
+                try:
+                    st.session_state[shortlist_key] = build_research_shortlist(facts, {item["Symbol"] for item in facts["ranked_results"]}, api_key, gemini_model)
+                except GeminiScreenerError as error:
+                    st.warning(str(error))
+            shortlist = st.session_state.get(shortlist_key)
+            if shortlist:
+                checked_symbols: list[str] = []
+                for candidate in shortlist["candidates"]:
+                    st.markdown(f"**{safe_text(candidate['symbol'])}** — {safe_text(candidate['screen_evidence'])}")
+                    st.caption(f"Counterpoint: {candidate['counterpoint']}  |  Next step: {candidate['next_step']}")
+                    choice_col, chart_col = st.columns([3, 1])
+                    if choice_col.checkbox(f"Add {candidate['symbol']} to comparison", key=f"shortlist-choice:{context_id}:{candidate['symbol']}"):
+                        checked_symbols.append(candidate["symbol"])
+                    chart_col.button("Open chart", key=f"shortlist-chart:{context_id}:{candidate['symbol']}", on_click=open_chart_for, args=(candidate["symbol"],), use_container_width=True)
+                if len(checked_symbols) >= 2:
+                    if st.button("Compare checked candidates", key=f"compare-shortlist:{context_id}"):
+                        selected_facts = dict(facts, selected_stocks=json_records(result[result["Symbol"].isin(checked_symbols)], list(result.columns), limit=5))
+                        try:
+                            st.session_state[f"research-comparison:{context_id}:shortlist"] = compare_research_stocks(selected_facts, set(checked_symbols), api_key, gemini_model)
+                        except GeminiScreenerError as error:
+                            st.warning(str(error))
+                    comparison = st.session_state.get(f"research-comparison:{context_id}:shortlist")
+                    if comparison:
+                        render_comparison(comparison)
+                elif shortlist:
+                    st.caption("Check at least two candidates to compare them.")
+        with compare_tab:
+            selected_symbols = st.multiselect("Choose 2 to 5 screen results", result["Symbol"].tolist(), max_selections=5, key=f"manual-compare:{context_id}")
+            if selected_symbols and len(selected_symbols) < 2:
+                st.caption("Choose one more company to compare.")
+            if len(selected_symbols) >= 2:
+                comparison_key = f"research-comparison:{context_id}:manual:{','.join(sorted(selected_symbols))}"
+                if st.button("Compare selected stocks", key=f"run-manual-compare:{context_id}"):
+                    selected_facts = dict(facts, selected_stocks=json_records(result[result["Symbol"].isin(selected_symbols)], list(result.columns), limit=5))
+                    try:
+                        st.session_state[comparison_key] = compare_research_stocks(selected_facts, set(selected_symbols), api_key, gemini_model)
+                    except GeminiScreenerError as error:
+                        st.warning(str(error))
+                comparison = st.session_state.get(comparison_key)
+                if comparison:
+                    render_comparison(comparison)
+
+
+def chart_research_cues(history: pd.DataFrame, symbol: str, range_label: str) -> None:
+    """Optional technical-context checks for the chart already on screen."""
+    with st.expander("Research cues", expanded=False):
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to enable optional chart research cues.")
+            return
+        latest_fields = ["Date", "Close", "RawClose", "Volume", "VolumeSMA20", "RSI14", "EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "Cross9_21", "Cross20_50", "Cross50_200"]
+        latest = json_records(history.tail(1), latest_fields, limit=1)[0]
+        recent_crosses = json_records(history.loc[history[["Cross9_21", "Cross20_50", "Cross50_200"]].any(axis=1)].tail(5), ["Date", "Cross9_21", "Cross20_50", "Cross50_200"], limit=5)
+        facts = {
+            "source": "Yahoo Finance daily EOD adjusted OHLC",
+            "symbol": symbol,
+            "range": range_label,
+            "latest": latest,
+            "recent_crossover_flags": recent_crosses,
+        }
+        cue_key = f"chart-cues:{symbol}:{range_label}:{latest.get('Date')}"
+        if st.button("Build research cues", key=f"build-{cue_key}"):
+            try:
+                st.session_state[cue_key] = build_chart_research_cues(facts, api_key, gemini_model)
+            except GeminiScreenerError as error:
+                st.warning(str(error))
+        cues = st.session_state.get(cue_key)
+        if cues:
+            render_research_list("Observations", cues["observations"])
+            render_research_list("Confirmation checks", cues["confirmation_checks"])
+            render_research_list("Limitations", cues["limitations"])
 
 
 def mover_row(row: pd.Series) -> None:
@@ -364,14 +490,11 @@ def screener(data: pd.DataFrame):
         "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
+    research_workbench(result, str(data["date"].iloc[0]), preset_copy, sort_label)
     inspect_col, action_col = st.columns([3, 1], vertical_alignment="bottom")
     inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
 
-    def open_chart() -> None:
-        st.session_state["page"] = "Charts"
-        st.session_state["chart_symbol"] = inspect_symbol
-
-    action_col.button("Open chart", use_container_width=True, on_click=open_chart)
+    action_col.button("Open chart", use_container_width=True, on_click=open_chart_for, args=(inspect_symbol,))
     st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
 
 
@@ -405,6 +528,7 @@ def charts(data: pd.DataFrame):
     rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
     figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
     st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+    chart_research_cues(history, symbol, range_label)
     st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
 
