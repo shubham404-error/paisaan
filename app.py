@@ -359,6 +359,31 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
             st.caption("Loads Yahoo Finance fundamentals and daily technical snapshots only for the stocks you chose.")
             return
         st.caption(f"Yahoo Finance data loaded for {', '.join(symbols)}. Ask what matters to your decision.")
+        comparison_table = pd.DataFrame(chat["facts"]["stocks"]).rename(columns={
+            "symbol": "Symbol", "as_of": "As of", "close": "Close", "pe": "P/E", "pb": "P/B", "roe": "ROE %",
+            "dividend_yield": "Yield %", "market_cap_cr": "Mkt cap (Cr)", "rsi_14": "RSI-14", "ema_9": "EMA-9",
+            "ema_21": "EMA-21", "sma_50": "SMA-50", "sma_200": "SMA-200", "volume_vs_20d_average": "Vol / 20D avg",
+        })
+        table_columns = ["Symbol", "As of", "Close", "P/E", "P/B", "ROE %", "Yield %", "Mkt cap (Cr)", "RSI-14", "EMA-9", "EMA-21", "SMA-50", "SMA-200"]
+        st.markdown("**Yahoo Finance comparison snapshot**")
+        st.dataframe(
+            comparison_table[[column for column in table_columns if column in comparison_table]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Close": st.column_config.NumberColumn(format="Rs %.2f"),
+                "P/E": st.column_config.NumberColumn(format="%.1f"),
+                "P/B": st.column_config.NumberColumn(format="%.1f"),
+                "ROE %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Yield %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Mkt cap (Cr)": st.column_config.NumberColumn(format="Rs %.0f Cr"),
+                "RSI-14": st.column_config.NumberColumn(format="%.1f"),
+                "EMA-9": st.column_config.NumberColumn(format="Rs %.2f"),
+                "EMA-21": st.column_config.NumberColumn(format="Rs %.2f"),
+                "SMA-50": st.column_config.NumberColumn(format="Rs %.2f"),
+                "SMA-200": st.column_config.NumberColumn(format="Rs %.2f"),
+            },
+        )
         for message in chat["messages"]:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
