@@ -90,9 +90,18 @@ def inject_css():
       [data-testid="stRadio"] label { padding: .15rem .25rem; }
       .chart-heading { font-size:1.55rem; font-weight:700; letter-spacing:-.045em; margin:0 0 .6rem; }
       .chart-meta { color:#8d98a7; font-size:.82rem; margin-top:-.35rem; margin-bottom:.65rem; }
-      .screener-hero { padding:1.35rem 1.5rem; margin-bottom:1rem; border:1px solid #263b3a; border-radius:18px; background:linear-gradient(115deg, rgba(17,36,35,.92), rgba(14,20,29,.9)); }
-      .screener-hero h1 { margin:.15rem 0 .3rem; font-size:2rem; letter-spacing:-.055em; }
+      .screener-hero { padding:1.3rem 1.5rem 1.05rem; margin-bottom:1rem; border:1px solid #263b3a; border-radius:18px; background:linear-gradient(115deg, rgba(17,36,35,.92), rgba(14,20,29,.9)); }
+      .screener-hero h1 { margin:.15rem 0 .28rem; font-size:2rem; letter-spacing:-.055em; }
       .screener-kicker { color:#2bd4a4; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; }
+      .screener-hero-top { display:flex; align-items:end; justify-content:space-between; gap:1.25rem; }
+      .screener-hero-copy { max-width:42rem; }
+      .screener-hero-note { max-width:18rem; padding:.65rem .75rem; border-left:2px solid #2bd4a4; color:#aab7c4; font-size:.77rem; line-height:1.45; background:rgba(43,212,164,.055); border-radius:0 9px 9px 0; }
+      .guide-steps { display:grid; grid-template-columns:repeat(3, 1fr); gap:.6rem; margin-top:1rem; }
+      .guide-step { min-height:72px; padding:.7rem .75rem; border:1px solid #29413f; border-radius:11px; background:rgba(6,12,16,.28); }
+      .guide-number { display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px; margin-right:.4rem; border-radius:50%; background:rgba(43,212,164,.14); color:#2bd4a4; font-size:.64rem; font-weight:750; }
+      .guide-step b { color:#e9eef3; font-size:.82rem; }
+      .guide-step p { margin:.34rem 0 0; color:#8d98a7; font-size:.73rem; line-height:1.38; }
+      @media (max-width: 760px) { .screener-hero-top { display:block; } .screener-hero-note { margin-top:.8rem; max-width:none; } .guide-steps { grid-template-columns:1fr; } }
       .scan-summary { padding:.7rem .85rem; border:1px solid #26313d; border-radius:12px; background:rgba(16,22,29,.72); color:#b9c3ce; font-size:.82rem; }
       .scan-summary b { color:#f0f4f8; }
       </style>
@@ -546,7 +555,23 @@ def legacy_screener(data: pd.DataFrame):
 
 def screener(data: pd.DataFrame):
     """An EOD scanner with opt-in Yahoo fundamental enrichment."""
-    st.markdown("<section class='screener-hero'><div class='screener-kicker'>Nifty 200 EOD market scanner</div><h1>Find the move. Keep the context.</h1><div class='small-note'>Start with verified NSE data. Add Yahoo fundamentals only when you need a deeper custom screen.</div></section>", unsafe_allow_html=True)
+    st.markdown("""
+    <section class='screener-hero'>
+      <div class='screener-hero-top'>
+        <div class='screener-hero-copy'>
+          <div class='screener-kicker'>Nifty 200 EOD market scanner</div>
+          <h1>Find the move. Keep the context.</h1>
+          <div class='small-note'>Move from a 200-stock view to a focused research set—without treating one-day data as a decision.</div>
+        </div>
+        <div class='screener-hero-note'><b style='color:#e9eef3'>How to read this page</b><br>Start broad, add precision only when it earns its place, then compare a short list on the same 1-year lens.</div>
+      </div>
+      <div class='guide-steps'>
+        <div class='guide-step'><span class='guide-number'>1</span><b>Scan</b><p>Use a quick scan, search, industry and ranking to find the current setup.</p></div>
+        <div class='guide-step'><span class='guide-number'>2</span><b>Refine</b><p>Open Refine scan for price or range filters; use Yahoo fundamentals only for a deeper screen.</p></div>
+        <div class='guide-step'><span class='guide-number'>3</span><b>Compare</b><p>Select 2–5 names for Yahoo snapshots, 1-year charts, Nifty 50 relative returns and follow-up questions.</p></div>
+      </div>
+    </section>
+    """, unsafe_allow_html=True)
     preset = st.radio("Quick scan", ["All stocks", "Top gainers", "Near day high", "Pullbacks"], horizontal=True)
     search_col, industry_col, sort_col = st.columns([1.35, 1.15, 1])
     query = search_col.text_input("Search company or symbol", placeholder="e.g. Reliance, TCS, BANK")
