@@ -3,11 +3,12 @@ from __future__ import annotations
 from html import escape
 import json
 import os
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
 from streamlit_data import fetch_constituents, fetch_quotes
@@ -20,10 +21,25 @@ st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹
 
 ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
 AI_RESEARCH_SCHEMA_VERSION = "v2"
+TRENDLYNE_WIDGET_BASE_URL = "https://trendlyne.com/web-widget"
 
 
 def safe_text(value: object) -> str:
     return escape(str(value))
+
+
+def trendlyne_widget_url(widget: str, symbol: str) -> str:
+    """Build Trendlyne's documented public widget URL for an NSE symbol."""
+    if widget not in {"qvt-widget", "swot-widget", "technical-widget"}:
+        raise ValueError("Unsupported Trendlyne widget.")
+    encoded_symbol = quote(symbol.strip().upper(), safe="")
+    palette = urlencode({"posCol": "2BD4A4", "primaryCol": "2BD4A4", "negCol": "FF6B6B", "neuCol": "F0A51A"})
+    return f"{TRENDLYNE_WIDGET_BASE_URL}/{widget}/Poppins/{encoded_symbol}/?{palette}"
+
+
+def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
+    """Render third-party widget in an isolated iframe so provider JS stays outside the app."""
+    components.iframe(trendlyne_widget_url(widget, symbol), height=height, scrolling=True)
 
 
 @st.cache_resource
@@ -950,6 +966,30 @@ def screener(data: pd.DataFrame):
         "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
+    st.divider()
+    show_trendlyne_compare = st.toggle("Compare QVT and SWOT scores with Trendlyne", key="trendlyne-screener-toggle", help="Uses Trendlyne's public widgets for an additional quality, valuation, technical and SWOT view. Open only when you want this third-party data.")
+    if show_trendlyne_compare:
+        comparison_symbols = st.multiselect(
+            "Choose up to 5 screened stocks",
+            result["Symbol"].tolist(),
+            default=result["Symbol"].head(min(2, len(result))).tolist(),
+            max_selections=5,
+            key="trendlyne-screener-symbols",
+        )
+        if comparison_symbols:
+            st.caption("Trendlyne widgets are provider-supplied and may use a different update schedule than the NSE and Yahoo Finance panels above.")
+            score_tabs = st.tabs(comparison_symbols)
+            for tab, comparison_symbol in zip(score_tabs, comparison_symbols):
+                with tab:
+                    qvt_col, swot_col = st.columns(2)
+                    with qvt_col:
+                        st.markdown("<div class='panel-title'>QVT score</div><div class='panel-subtitle'>Quality · valuation · technicals</div>", unsafe_allow_html=True)
+                        trendlyne_widget("qvt-widget", comparison_symbol, 365)
+                    with swot_col:
+                        st.markdown("<div class='panel-title'>SWOT view</div><div class='panel-subtitle'>Strengths · weaknesses · opportunities · threats</div>", unsafe_allow_html=True)
+                        trendlyne_widget("swot-widget", comparison_symbol, 365)
+        else:
+            st.info("Choose one to five stocks from this screen to open their Trendlyne scorecards.")
     research_workbench(result, str(data["date"].iloc[0]), preset_copy, sort_label)
     inspect_col, action_col, watch_add_col = st.columns([3, 1, 1], vertical_alignment="bottom")
     inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
@@ -1001,6 +1041,10 @@ def charts(data: pd.DataFrame):
     rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
     figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
     st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+    show_trendlyne_technicals = st.toggle("Show Trendlyne technical panel", key="trendlyne-chart-toggle", help="Opens Trendlyne's third-party technical widget for the chart symbol.")
+    if show_trendlyne_technicals:
+        st.markdown(f"<div class='section-title'>Trendlyne technicals <span class='small-note'>/ {safe_text(symbol)}</span></div><p class='section-copy'>A provider-supplied technical snapshot alongside the Yahoo Finance chart above.</p>", unsafe_allow_html=True)
+        trendlyne_widget("technical-widget", symbol, 550)
     chart_question_chat(history, symbol, range_label)
     st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
