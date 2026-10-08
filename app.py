@@ -75,6 +75,23 @@ def live_universe() -> tuple[pd.DataFrame, str]:
     return frame, payload.get("as_of", "unknown")
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def sector_snapshot() -> tuple[pd.DataFrame, str | None]:
+    response = httpx.get(f"{API_BASE_URL}/v1/sectors", timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+    return pd.DataFrame(payload.get("sectors", [])), payload.get("as_of")
+
+
+@st.cache_data(ttl=120, show_spinner="Applying technical screen…")
+def screened_stocks(industry: str | None, min_rsi: float | None, min_volume_ratio: float | None, above_sma50: bool, min_return_1m: float | None) -> tuple[pd.DataFrame, str | None]:
+    params = {"industry": industry, "min_rsi": min_rsi, "min_volume_ratio": min_volume_ratio, "above_sma50": above_sma50, "min_return_1m": min_return_1m, "limit": 200}
+    response = httpx.get(f"{API_BASE_URL}/v1/screener", params={key: value for key, value in params.items() if value is not None}, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+    return pd.DataFrame(payload.get("matches", [])), payload.get("as_of")
+
+
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
 
 
@@ -109,18 +126,6 @@ def gain(value: float) -> str:
     return f"<span class='{ 'gain' if value >= 0 else 'loss' }'>{value:+.2f}%</span>"
 
 
-def market_summary(data: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    """Derive transparent equal-weight sector observations from the API snapshot."""
-    enriched = data.assign(Turnover=data["Price"] * data["Volume"])
-    sectors = (enriched.groupby("Industry", dropna=False)
-               .agg(Members=("Symbol", "size"), Average_change=("Change %", "mean"), Advances=("Change %", lambda values: int((values > 0).sum())), Declines=("Change %", lambda values: int((values < 0).sum())), Turnover=("Turnover", "sum"))
-               .reset_index()
-               .sort_values("Average_change", ascending=False))
-    leader, laggard = sectors.iloc[0], sectors.iloc[-1]
-    summary = f"{leader.Industry} leads the Nifty 200 universe ({leader.Average_change:+.2f}% equal-weight); {laggard.Industry} trails ({laggard.Average_change:+.2f}%)."
-    return sectors, summary
-
-
 def mover_row(row: pd.Series) -> None:
     strength = min(abs(row["Change %"]) / 8 * 100, 100)
     color = GREEN if row["Change %"] >= 0 else RED
@@ -128,7 +133,12 @@ def mover_row(row: pd.Series) -> None:
 
 
 def dashboard(data: pd.DataFrame, updated: str):
-    sectors, sentiment = market_summary(data)
+    sectors, sectors_as_of = sector_snapshot()
+    if sectors.empty:
+        sentiment = "Sector analytics will appear after the initial market-close ingestion completes."
+    else:
+        leader, laggard = sectors.iloc[0], sectors.iloc[-1]
+        sentiment = f"{leader.industry} leads the Nifty 200 universe ({leader.average_change_pct:+.2f}% equal-weight); {laggard.industry} trails ({laggard.average_change_pct:+.2f}%)."
     st.markdown(f"""<div class='topbar'>
       <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated}</div>
@@ -158,34 +168,36 @@ def dashboard(data: pd.DataFrame, updated: str):
             for _, row in data.nsmallest(4, "Change %").iterrows():
                 mover_row(row)
 
-    st.markdown("<div class='section-title'>Sector pulse</div><p class='section-copy'>Equal-weighted daily movement across the current Nifty 200 constituent set.</p>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>Sector pulse</div><p class='section-copy'>Persisted equal-weighted movement across the current Nifty 200 constituent set{f' · as of {sectors_as_of}' if sectors_as_of else ''}.</p>", unsafe_allow_html=True)
     sector_cols = st.columns(4)
-    for column, (_, sector) in zip(sector_cols, sectors.head(4).iterrows()):
-        dot = GREEN if sector.Average_change >= 0 else RED
-        column.markdown(f"<div class='sector-chip'><i class='sector-dot' style='background:{dot}'></i><b>{sector.Industry}</b><span style='margin-left:auto'>{gain(sector.Average_change)}</span></div><div class='small-note'>{int(sector.Advances)} up · {int(sector.Declines)} down · {int(sector.Members)} stocks</div>", unsafe_allow_html=True)
-
-    shown_sectors = sectors[["Industry", "Members", "Average_change", "Advances", "Declines", "Turnover"]].copy()
-    shown_sectors["Average_change"] = shown_sectors["Average_change"].map(lambda value: f"{value:+.2f}%")
-    shown_sectors["Turnover"] = shown_sectors["Turnover"].map(lambda value: f"₹{value / 10_000_000:,.1f} Cr")
-    st.dataframe(shown_sectors, use_container_width=True, hide_index=True, column_config={"Average_change": "Average move"})
+    if sectors.empty:
+        st.info("Sector aggregates are not available yet. Run the market-close ingestion task to populate them.")
+    else:
+        for column, (_, sector) in zip(sector_cols, sectors.head(4).iterrows()):
+            dot = GREEN if sector.average_change_pct >= 0 else RED
+            column.markdown(f"<div class='sector-chip'><i class='sector-dot' style='background:{dot}'></i><b>{sector.industry}</b><span style='margin-left:auto'>{gain(sector.average_change_pct)}</span></div><div class='small-note'>{int(sector.advancers)} up · {int(sector.decliners)} down · {int(sector.members)} stocks</div>", unsafe_allow_html=True)
+        shown_sectors = sectors[["industry", "members", "average_change_pct", "advancers", "decliners", "turnover"]].copy()
+        shown_sectors["average_change_pct"] = shown_sectors["average_change_pct"].map(lambda value: f"{value:+.2f}%")
+        shown_sectors["turnover"] = shown_sectors["turnover"].map(lambda value: f"₹{value / 10_000_000:,.1f} Cr")
+        st.dataframe(shown_sectors, use_container_width=True, hide_index=True, column_config={"average_change_pct": "Average move"})
 
 
 def screener(data: pd.DataFrame):
     st.header("Screener")
-    x, y, z = st.columns(3)
+    st.caption("Uses persisted technical snapshots. Coverage grows as historical backfill completes.")
+    x, y, z, w = st.columns(4)
     industry = x.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
-    move = y.selectbox("Daily move", ["Any", "Gainers", "Losers"])
-    query = z.text_input("Search symbol")
-    result = data.copy()
-    if industry != "All": result = result[result.Industry == industry]
-    if move == "Gainers": result = result[result["Change %"] > 0]
-    if move == "Losers": result = result[result["Change %"] < 0]
-    if query: result = result[result.Symbol.str.contains(query.upper())]
-    shown = result[["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Day High", "Day Low"]].copy()
-    shown["Price"] = shown.Price.map(lambda n: f"₹{n:,.2f}")
-    shown["Change %"] = shown["Change %"].map(lambda n: f"{n:+.2f}%")
+    min_rsi = y.number_input("Minimum RSI-14", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
+    min_volume = z.number_input("Minimum volume ratio", min_value=0.0, value=0.0, step=0.1)
+    above_sma50 = w.toggle("Price above SMA-50", value=False)
+    min_return = st.number_input("Minimum 1-month return (%)", value=0.0, step=1.0)
+    result, as_of = screened_stocks(industry if industry != "All" else None, min_rsi if min_rsi > 0 else None, min_volume if min_volume > 0 else None, above_sma50, min_return if min_return != 0 else None)
+    if result.empty:
+        st.info("No completed technical snapshots match these filters yet. Historical backfill will expand screen coverage.")
+        return
+    shown = result.rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Close", "rsi14": "RSI-14", "sma50": "SMA-50", "sma200": "SMA-200", "volume_ratio_20d": "Volume ratio", "return_1m": "1M return", "return_1y": "1Y return"})
     st.dataframe(shown, use_container_width=True, hide_index=True)
-    st.caption(f"{len(result)} of {len(data)} official Nifty 200 constituents match the selected filters.")
+    st.caption(f"{len(result)} technical matches · snapshot date: {as_of or 'not available'}")
 
 
 def charts(data: pd.DataFrame):
