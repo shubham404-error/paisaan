@@ -362,7 +362,19 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
         for message in chat["messages"]:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
-        question = st.chat_input("Ask about these selected stocks", key=f"ask-{chat_key}")
+        st.markdown("**Quick questions**")
+        quick_prompts = [
+            ("Valuation", "Which selected stock has the more attractive valuation profile based on the available Yahoo Finance data?"),
+            ("Quality", "How do these stocks compare on the available quality signals such as ROE, and what should I inspect next?"),
+            ("Technical setup", "Which selected stock has the stronger current technical setup based on price, RSI, and moving averages?"),
+            ("Decision checklist", "Give me the three most important checks to make before choosing one of these stocks."),
+        ]
+        prompt_columns = st.columns(2)
+        selected_prompt = None
+        for index, (label, prompt) in enumerate(quick_prompts):
+            if prompt_columns[index % 2].button(label, key=f"quick-prompt:{chat_key}:{index}", use_container_width=True):
+                selected_prompt = prompt
+        question = selected_prompt or st.chat_input("Ask about these selected stocks", key=f"ask-{chat_key}")
         if question:
             chat["messages"].append({"role": "user", "content": question})
             with st.chat_message("user"):
