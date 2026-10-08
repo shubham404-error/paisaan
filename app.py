@@ -688,12 +688,12 @@ def mover_row(row: pd.Series) -> None:
 
 def market_tape(data: pd.DataFrame) -> None:
     """Render a compact, decorative tape from the current verified EOD snapshot."""
-    movers = pd.concat([data.nlargest(5, "Change %"), data.nsmallest(5, "Change %")]).drop_duplicates("Symbol")
+    movers = pd.concat([data.nlargest(15, "Change %"), data.nsmallest(15, "Change %")]).drop_duplicates("Symbol")
     items = "".join(
         f"<span class='market-tape-item'><span class='market-tape-symbol'>{safe_text(row.Symbol)}</span><span class='market-tape-price'>₹{row.Price:,.2f}</span><span class='market-tape-{'up' if row['Change %'] >= 0 else 'down'}'>{row['Change %']:+.2f}%</span></span>"
         for _, row in movers.iterrows()
     )
-    st.markdown(f"<div class='market-tape'><div class='market-tape-label'>Nifty 200 tape</div><div class='market-tape-viewport'><div class='market-tape-track'><div class='market-tape-group'>{items}</div><div class='market-tape-group' aria-hidden='true'>{items}</div></div></div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='market-tape'><div class='market-tape-label'>Nifty 200 movers</div><div class='market-tape-viewport'><div class='market-tape-track'><div class='market-tape-group'>{items}</div><div class='market-tape-group' aria-hidden='true'>{items}</div></div></div></div>", unsafe_allow_html=True)
 
 
 def watchlist_page(data: pd.DataFrame) -> None:
