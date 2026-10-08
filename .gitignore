@@ -15,3 +15,7 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local review material; keep outside the published application repository
+cto-review.md
+review doc.pdf
