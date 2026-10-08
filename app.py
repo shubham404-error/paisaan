@@ -16,6 +16,7 @@ from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
 ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
+AI_RESEARCH_SCHEMA_VERSION = "v2"
 
 
 def safe_text(value: object) -> str:
@@ -195,6 +196,10 @@ def screener_research_packet(result: pd.DataFrame, as_of: str, preset: str, rank
 
 
 def render_comparison(comparison: dict, selected: pd.DataFrame) -> None:
+    required = {"decision_lenses", "data_gaps", "research_actions"}
+    if not required.issubset(comparison):
+        st.info("This research comparison used an older format. Run the comparison again to refresh it.")
+        return
     overview_columns = [column for column in ("Symbol", "Company", "Industry", "Price", "Change %", "Day range %", "pe", "pb", "roe", "dividend_yield", "market_cap_cr") if column in selected]
     st.markdown("**At a glance**")
     st.dataframe(selected[overview_columns], use_container_width=True, hide_index=True, column_config={
@@ -224,7 +229,7 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
             st.info("Add GEMINI_API_KEY in Streamlit secrets to enable the optional research workbench.")
             return
         facts = screener_research_packet(result, as_of, preset, rank_by)
-        context_id = str(abs(hash((as_of, preset, rank_by, tuple(item["Symbol"] for item in facts["ranked_results"])))))
+        context_id = str(abs(hash((AI_RESEARCH_SCHEMA_VERSION, as_of, preset, rank_by, tuple(item["Symbol"] for item in facts["ranked_results"])))))
         shortlist_tab, compare_tab = st.tabs(["AI shortlist", "Compare selected"])
         with shortlist_tab:
             st.caption("Creates up to three research candidates from the displayed ranked results. It does not make investment recommendations.")
