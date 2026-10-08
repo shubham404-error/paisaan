@@ -138,6 +138,7 @@ def market_chart(
     overlays: list[str],
     days: int = 180,
     rsi_lines: list[tuple[float, str]] | None = None,
+    height: int = 690,
 ) -> go.Figure:
     """Three-panel Terminal-compatible daily candlestick chart."""
     chart = frame.sort_values("Date").tail(days).copy()
@@ -161,7 +162,7 @@ def market_chart(
         figure.add_trace(go.Scatter(x=chart["Date"], y=chart["RSI14"], mode="lines", name="RSI14", line={"width": 1.7, "color": "#8ab4ff"}), row=3, col=1)
     for level, label in rsi_lines or [(30, "RSI 30"), (70, "RSI 70")]:
         figure.add_hline(y=level, row=3, col=1, line_dash="dot", line_color="#46515f", line_width=1, annotation_text=label, annotation_position="top left", annotation_font={"size": 9, "color": "#7f8b99"})
-    figure.update_layout(height=690, margin={"l": 8, "r": 8, "t": 40, "b": 10}, paper_bgcolor="#080a0d", plot_bgcolor="#080a0d", font={"family": "Helvetica, Arial, sans-serif", "color": "#e9eef3"}, legend={"orientation": "h", "y": 1.03, "x": 0, "font": {"size": 10}}, hovermode="x unified", xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, xaxis3_rangeslider_visible=False)
+    figure.update_layout(height=height, margin={"l": 8, "r": 8, "t": 40, "b": 10}, paper_bgcolor="#080a0d", plot_bgcolor="#080a0d", font={"family": "Helvetica, Arial, sans-serif", "color":"#e9eef3"}, legend={"orientation":"h", "y":1.03, "x":0, "font":{"size":10}}, hovermode="x unified", xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, xaxis3_rangeslider_visible=False)
     for row in (1, 2, 3):
         figure.update_yaxes(gridcolor="#1d232b", linecolor="#252c35", showline=False, zeroline=False, row=row, col=1)
     figure.update_yaxes(range=[0, 100], title_text="RSI", title_font={"size": 10, "color": "#8c98a6"}, row=3, col=1)

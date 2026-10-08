@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
-import re
 import time
 from urllib.request import Request, urlopen
 
@@ -18,7 +17,6 @@ from nse_mcp import BHAVCOPY_URL, call_nse_tool
 
 NIFTY_200_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
 RETRY_ATTEMPTS = 3
-SYMBOL_PATTERN = re.compile(r"^[A-Z0-9&-]{1,32}$")
 
 
 def _retry(operation, description: str):
@@ -72,23 +70,3 @@ def fetch_quotes(constituents: list[dict]) -> list[dict]:
     for row in rows:
         _validate_ohlcv(row, "quote")
     return rows
-
-
-def fetch_history(symbol: str, months: int) -> list[dict]:
-    """Get a single symbol's historical bars. Use only on the chart/detail path."""
-    symbol = symbol.upper()
-    if not SYMBOL_PATTERN.fullmatch(symbol) or not 1 <= months <= 36:
-        raise ValueError("Unsupported NSE symbol or history range.")
-    rows, end_date, remaining = [], "today", months
-    while remaining > 0:
-        chunk = min(3, remaining)
-        response = _retry(lambda: call_nse_tool("get_stock_history", {"symbol": symbol, "months": chunk, "endDate": end_date}, BHAVCOPY_URL), f"{symbol} history")
-        rows.extend(response.get("data", []))
-        end_date = response.get("next_end_date")
-        if not end_date:
-            break
-        remaining -= chunk
-    normalized = sorted({row["date"]: row for row in rows}.values(), key=lambda row: row["date"])
-    for row in normalized:
-        _validate_ohlcv(row, "historical")
-    return normalized

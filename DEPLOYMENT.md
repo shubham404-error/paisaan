@@ -19,8 +19,8 @@
 
 ## Operating limits
 
-- NSE MCP is an upstream public service. The app retries a failed constituent, quote, or dashboard-chart request three times with backoff, then presents a retry button.
+- NSE MCP is an upstream public service. The app retries failed constituent and quote requests three times with backoff, then presents a retry button.
 - Yahoo Finance supplies selected-symbol daily charts. A Yahoo rate limit or provider error leaves the last valid session chart available.
-- Market data is cached in the Streamlit runtime: quotes for 10 minutes, NSE dashboard history for one hour, and Yahoo charts for four hours.
+- Market data is cached in the Streamlit runtime: quotes for 10 minutes and Yahoo charts for four hours.
 - Session-only watchlists are deliberately hidden until a persistent, authenticated implementation is available.
 - The full-universe screener uses cached EOD fields. A durable 200-stock historical technical screen needs external persistence and scheduled workers, which are deliberately outside this Streamlit-only deployment.

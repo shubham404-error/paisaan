@@ -4,9 +4,8 @@ from html import escape
 
 import pandas as pd
 import streamlit as st
-import altair as alt
 
-from streamlit_data import fetch_constituents, fetch_history, fetch_quotes
+from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
@@ -107,47 +106,13 @@ def screened_stocks(data: pd.DataFrame, industry: str | None, min_change: float 
     return result.sort_values("Change %", ascending=False)
 
 
-RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
 YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y": 756}
-
-
-@st.cache_data(ttl=3600, show_spinner="Loading historical NSE bhavcopy data…")
-def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
-    """Read one chart directly from NSE MCP; cache keeps navigation fast."""
-    history = pd.DataFrame(fetch_history(symbol, months_needed)).drop_duplicates(subset="date").sort_values("date")
-    if history.empty:
-        raise RuntimeError(f"No Bhavcopy history is available for {symbol}.")
-    if "close" not in history and "ltp" in history:
-        history = history.rename(columns={"ltp": "close"})
-    if "volume" not in history and "totalTradedVolume" in history:
-        history = history.rename(columns={"totalTradedVolume": "volume"})
-    history["date"] = pd.to_datetime(history["date"])
-    return history
 
 
 @st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading daily Yahoo Finance chart data…")
 def yahoo_chart_history(symbol: str, period: str, interval: str, adjustment_contract: str) -> pd.DataFrame:
     """Cached selected-symbol chart history; cache key includes provider contract."""
     return calculate_indicators(download_daily_history(symbol, period, interval, adjustment_contract))
-
-
-def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False):
-    """Fast Vega-Lite market chart; older history is downsampled before render."""
-    view = history.copy()
-    if long_range and len(view) > 260:
-        aggregation = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-        aggregation.update({column: "last" for column in ("sma20", "sma50", "sma200") if column in view})
-        view = view.set_index("date").resample("W-FRI").agg(aggregation).dropna(subset=["open", "high", "low", "close"]).reset_index()
-    base = alt.Chart(view).encode(x=alt.X("date:T", title=None, axis=alt.Axis(grid=False, labelColor=MUTED)), tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("open:Q", title="Open", format=".2f"), alt.Tooltip("high:Q", title="High", format=".2f"), alt.Tooltip("low:Q", title="Low", format=".2f"), alt.Tooltip("close:Q", title="Close", format=".2f")])
-    if candle:
-        color = alt.condition("datum.open <= datum.close", alt.value(GREEN), alt.value(RED))
-        chart = base.mark_rule().encode(y=alt.Y("low:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(gridColor="#202932", labelColor=MUTED)), y2="high:Q", color=color) + base.mark_bar(size=7).encode(y=alt.Y("open:Q", scale=alt.Scale(zero=False)), y2="close:Q", color=color)
-    else:
-        chart = base.mark_area(line={"color": ACCENT, "strokeWidth": 2.5}, color=alt.Gradient(gradient="linear", stops=[alt.GradientStop(color="rgba(43,212,164,.22)", offset=0), alt.GradientStop(color="rgba(43,212,164,0)", offset=1)], x1=1, x2=1, y1=1, y2=0)).encode(y=alt.Y("close:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)))
-    for column, color in (("sma20", "#ffd166"), ("sma50", "#8ab4ff"), ("sma200", "#d0a2ff")):
-        if column in view and view[column].notna().any():
-            chart += base.mark_line(color=color, strokeWidth=1.4, opacity=.9).encode(y=alt.Y(f"{column}:Q", title=None))
-    return chart.properties(height=315).resolve_scale(y="shared").configure_view(strokeOpacity=0).configure_axis(domain=False, tickColor="#202932")
 
 
 def gain(value: float) -> str:
@@ -183,12 +148,17 @@ def dashboard(data: pd.DataFrame, updated: str):
     left, right = st.columns([1.5, 1])
     with left:
         symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
+        resolved_symbol = yahoo_symbol(symbol)
+        cache_key = f"dashboard_yahoo_chart:{resolved_symbol}:3y:1d:{ADJUSTMENT_CONTRACT}"
         try:
-            history = stock_history(symbol, 3)
-            st.markdown(f"<div class='panel-title'>{safe_text(symbol)}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
-            st.altair_chart(display_chart(history, candle=False), use_container_width=True)
-        except Exception:
-            st.warning("This chart is temporarily unavailable. The rest of the market snapshot is still current.")
+            history, stale = load_with_last_valid(lambda: yahoo_chart_history(resolved_symbol, "3y", "1d", ADJUSTMENT_CONTRACT), st.session_state.get(cache_key))
+            st.session_state[cache_key] = history
+            st.markdown(f"<div class='panel-title'>{safe_text(symbol)}</div><div class='panel-subtitle'>3-month Yahoo Finance daily technical view</div>", unsafe_allow_html=True)
+            st.plotly_chart(market_chart(history, resolved_symbol, ["EMA9", "EMA21", "SMA50"], days=66, rsi_lines=[(30, "RSI 30"), (70, "RSI 70")], height=460), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+            if stale:
+                st.caption("Showing the last valid Yahoo Finance chart from this session.")
+        except (YahooChartError, ValueError):
+            st.warning("This Yahoo Finance chart is temporarily unavailable. The rest of the market snapshot is still current.")
     with right:
         st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div>", unsafe_allow_html=True)
         gainers, losers = st.tabs(["Top gainers", "Top losers"])
@@ -234,7 +204,7 @@ def charts(data: pd.DataFrame):
     st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Daily technical chart · Yahoo Finance adjusted OHLC · end-of-day data, not a live execution feed</div>", unsafe_allow_html=True)
     symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
     symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist())
-    range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
+    range_label = range_col.radio("Range", list(YAHOO_WINDOWS), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
     resolved_symbol = yahoo_symbol(symbol)
     st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{safe_text(symbol)} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
@@ -281,7 +251,6 @@ with st.sidebar:
         allowed, remaining = refresh_gate().request()
         if allowed:
             live_universe.clear()
-            stock_history.clear()
             yahoo_chart_history.clear()
             st.rerun()
         st.caption(f"Refresh available in {remaining}s.")
