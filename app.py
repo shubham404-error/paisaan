@@ -57,6 +57,16 @@ def inject_css():
       .topbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding: .35rem 0 1.2rem; }
       .live-dot { display:inline-block; width:7px; height:7px; border-radius:999px; background:#2bd4a4; box-shadow: 0 0 0 5px rgba(43,212,164,.12); margin-right:.5rem; }
       .market-pill { border:1px solid #23323a; background:rgba(13,23,27,.76); padding:.45rem .75rem; border-radius:999px; color:#b9c3ce; font-size:.78rem; }
+      .market-tape { display:flex; align-items:stretch; overflow:hidden; margin:-.3rem 0 1rem; border:1px solid #23343a; border-radius:11px; background:rgba(11,17,22,.78); }
+      .market-tape-label { display:flex; align-items:center; flex:0 0 auto; padding:0 .8rem; color:#9eabba; background:#101a20; border-right:1px solid #26353b; font-size:.68rem; font-weight:750; letter-spacing:.12em; text-transform:uppercase; z-index:1; }
+      .market-tape-viewport { min-width:0; overflow:hidden; }
+      .market-tape-track { display:flex; width:max-content; animation:market-tape-scroll 42s linear infinite; }
+      .market-tape-group { display:flex; align-items:center; white-space:nowrap; }
+      .market-tape-item { display:inline-flex; align-items:center; gap:.42rem; padding:.58rem .86rem; border-right:1px solid #202d33; color:#dce4eb; font-size:.76rem; }
+      .market-tape-symbol { font-weight:750; letter-spacing:.01em; } .market-tape-price { color:#8d98a7; } .market-tape-up { color:#2bd4a4; } .market-tape-down { color:#ff7a7a; }
+      .market-tape:hover .market-tape-track { animation-play-state:paused; }
+      @keyframes market-tape-scroll { from { transform:translateX(0); } to { transform:translateX(-50%); } }
+      @media (prefers-reduced-motion: reduce) { .market-tape-track { animation:none; } }
       .source-note { color:#73808f; font-size:.72rem; margin:.5rem 0 1.1rem; }
       .hero { padding: 2.3rem 2.5rem; border: 1px solid #29423e; border-radius: 22px;
               background: linear-gradient(120deg, rgba(17,31,35,.96), rgba(12,18,26,.82)); box-shadow: 0 18px 50px rgba(0,0,0,.16); }
@@ -490,6 +500,16 @@ def mover_row(row: pd.Series) -> None:
     st.markdown(f"<div class='feed'><b>{safe_text(row['Symbol'])}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{safe_text(row['Company'])} · ₹{row['Price']:,.2f}</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
 
 
+def market_tape(data: pd.DataFrame) -> None:
+    """Render a compact, decorative tape from the current verified EOD snapshot."""
+    movers = pd.concat([data.nlargest(5, "Change %"), data.nsmallest(5, "Change %")]).drop_duplicates("Symbol")
+    items = "".join(
+        f"<span class='market-tape-item'><span class='market-tape-symbol'>{safe_text(row.Symbol)}</span><span class='market-tape-price'>₹{row.Price:,.2f}</span><span class='market-tape-{'up' if row['Change %'] >= 0 else 'down'}'>{row['Change %']:+.2f}%</span></span>"
+        for _, row in movers.iterrows()
+    )
+    st.markdown(f"<div class='market-tape'><div class='market-tape-label'>Nifty 200 tape</div><div class='market-tape-viewport'><div class='market-tape-track'><div class='market-tape-group'>{items}</div><div class='market-tape-group' aria-hidden='true'>{items}</div></div></div></div>", unsafe_allow_html=True)
+
+
 def dashboard(data: pd.DataFrame, updated: str):
     sectors, sectors_as_of = sector_snapshot(data)
     if sectors.empty:
@@ -501,6 +521,7 @@ def dashboard(data: pd.DataFrame, updated: str):
       <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · pehchaan-first market desk</span></div>
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated} · no FOMO</div>
     </div>""", unsafe_allow_html=True)
+    market_tape(data)
     st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· facts follow.</span></div></section>", unsafe_allow_html=True)
     st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
