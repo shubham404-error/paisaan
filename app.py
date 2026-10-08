@@ -120,6 +120,9 @@ def inject_css():
       .sentiment { border-left:3px solid #2bd4a4; background:rgba(43,212,164,.06); border-radius:0 12px 12px 0; padding:.75rem .9rem; margin:1rem 0 .2rem; color:#c8d1da; font-size:.9rem; }
       .meme-note { display:inline-flex; align-items:center; gap:.45rem; margin-top:1rem; padding:.42rem .65rem; border:1px solid rgba(43,212,164,.28); border-radius:999px; background:rgba(43,212,164,.07); color:#c8d1da; font-size:.76rem; }
       .meme-note b { color:#2bd4a4; letter-spacing:.02em; }
+      .header-chips { display:flex; flex-wrap:wrap; gap:.45rem; margin-top:.9rem; }
+      .header-chip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .58rem; border:1px solid rgba(121,150,159,.26); border-radius:999px; background:rgba(5,12,16,.23); color:#b8c6cf; font-size:.72rem; }
+      .header-chip b { color:#edf4f3; font-weight:650; }
       .small-note { color: #8d98a7; font-size: .78rem; }
       .stButton button { border-radius: 999px; border-color: #315448; font-weight:600; }
       .stDataFrame { border:1px solid #242d37; border-radius:14px; overflow:hidden; }
@@ -699,7 +702,7 @@ def watchlist_page(data: pd.DataFrame) -> None:
     state = watchlist_state(valid_symbols)
     initial_count = len(state["lists"][state["active"]])
     st.markdown(f"""<section class='watchlist-hero'><div class='watchlist-hero-inner'>
-      <div class='watchlist-hero-copy'><div class='screener-kicker'>Session watchlists · portable by design</div><h1>Your research shelf.</h1><div class='small-note'>Keep the names worth revisiting, compare their progress, and take the list with you when you leave.</div></div>
+      <div class='watchlist-hero-copy'><div class='screener-kicker'>Session watchlists · your research corner</div><h1>Paisa saved. Pehchaan pending.</h1><div class='small-note'>Keep the names worth revisiting, inspect their progress, then share or export a clean research snapshot.</div><div class='header-chips'><span class='header-chip'><b>1</b> collect from a screen</span><span class='header-chip'><b>2</b> compare the context</span><span class='header-chip'><b>3</b> share the snapshot</span></div></div>
       <div class='watchlist-count'><b>{initial_count}</b><span>of 20<br>stocks</span></div>
     </div></section>""", unsafe_allow_html=True)
     list_col, share_col, create_col, sync_col = st.columns([2.1, 1.1, 1, 1], vertical_alignment="bottom")
@@ -799,7 +802,7 @@ def dashboard(data: pd.DataFrame, updated: str):
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated} · no FOMO</div>
     </div>""", unsafe_allow_html=True)
     market_tape(data)
-    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· facts follow.</span></div></section>", unsafe_allow_html=True)
+    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · Nifty 200 desk</div><h1>more pehchaan.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>Start with the market pulse, open one clean chart, then take only the names worth researching further.</p><div class='header-chips'><span class='header-chip'><b>Pulse</b> see breadth & sectors</span><span class='header-chip'><b>Price</b> inspect a 1-year chart</span><span class='header-chip'><b>Proof</b> screen before you chase</span></div><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· no jaldibaazi, facts follow.</span></div></section>", unsafe_allow_html=True)
     st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
@@ -864,15 +867,15 @@ def screener(data: pd.DataFrame):
       <div class='screener-hero-top'>
         <div class='screener-hero-copy'>
           <div class='screener-kicker'>Nifty 200 EOD market scanner</div>
-          <h1>Find the move. Keep the context.</h1>
-          <div class='small-note'>Move from a 200-stock view to a focused research set—without treating one-day data as a decision.</div>
+          <h1>Catch the move. Check the pehchaan.</h1>
+          <div class='small-note'>Turn a 200-stock snapshot into a short, comparable research list—one-day excitement is not the thesis.</div>
         </div>
-        <div class='screener-hero-note'><b style='color:#e9eef3'>How to read this page</b><br>Start broad, add precision only when it earns its place, then compare a short list on the same 1-year lens.</div>
+        <div class='screener-hero-note'><b style='color:#e9eef3'>Best-use shortcut</b><br>Filter the setup, keep 2–5 names, then compare fundamentals, returns and provider scorecards side by side.</div>
       </div>
       <div class='guide-steps'>
-        <div class='guide-step'><span class='guide-number'>1</span><b>Scan</b><p>Use a quick scan, search, industry and ranking to find the current setup.</p></div>
-        <div class='guide-step'><span class='guide-number'>2</span><b>Refine</b><p>Open Refine scan for price or range filters; use Yahoo fundamentals only for a deeper screen.</p></div>
-        <div class='guide-step'><span class='guide-number'>3</span><b>Compare</b><p>Select 2–5 names for Yahoo snapshots, 1-year charts, Nifty 50 relative returns and follow-up questions.</p></div>
+        <div class='guide-step'><span class='guide-number'>1</span><b>Scan the vibe</b><p>Use quick scans, search and ranking to find a live setup.</p></div>
+        <div class='guide-step'><span class='guide-number'>2</span><b>Check the facts</b><p>Refine with price/range filters; add Yahoo fundamentals only when useful.</p></div>
+        <div class='guide-step'><span class='guide-number'>3</span><b>Make it earn attention</b><p>Compare 2–5 names on one-year returns, fundamentals and scorecards.</p></div>
       </div>
     </section>
     """, unsafe_allow_html=True)
@@ -1017,12 +1020,12 @@ def charts(data: pd.DataFrame):
     st.markdown("""
     <section class='chart-hero'>
       <div class='screener-kicker'>Yahoo Finance · daily EOD technical view</div>
-      <h1>Read the setup. Then ask the chart.</h1>
-      <div class='small-note'>Use one symbol at a time; the controls change the evidence on screen, not a recommendation.</div>
+      <h1>See the chart. Skip the jaldibaazi.</h1>
+      <div class='small-note'>Start with price over time, add indicators only when they answer a real question, then verify the context.</div>
       <div class='chart-guide'>
-        <div class='chart-guide-item'><b>1. Set the window</b>Use the range to judge whether a move is short-term noise or part of a larger structure.</div>
-        <div class='chart-guide-item'><b>2. Keep overlays intentional</b>EMA/SMA show trend context; RSI and volume help test momentum and participation.</div>
-        <div class='chart-guide-item'><b>3. Ask one decision question</b>Open Ask this chart for a focused follow-up, then verify it against the visible chart.</div>
+        <div class='chart-guide-item'><b>1. Zoom out first</b>Use 1Y for structure; shorter windows are for detail, not drama.</div>
+        <div class='chart-guide-item'><b>2. Add proof, not clutter</b>EMA/SMA give trend context; RSI and volume test momentum and participation.</div>
+        <div class='chart-guide-item'><b>3. Check before the hype</b>Use Research cues for one focused follow-up, then verify it against the visible chart.</div>
       </div>
     </section>
     """, unsafe_allow_html=True)
