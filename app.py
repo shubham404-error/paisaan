@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 from html import escape
 import json
 import os
+from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
@@ -26,6 +28,15 @@ TRENDLYNE_WIDGET_BASE_URL = "https://trendlyne.com/web-widget"
 
 def safe_text(value: object) -> str:
     return escape(str(value))
+
+
+@st.cache_data
+def local_gif_data_uri(filename: str) -> str:
+    """Embed a small local animation without depending on an external media host."""
+    path = Path(__file__).with_name(filename)
+    if not path.is_file():
+        return ""
+    return f"data:image/gif;base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
 def trendlyne_widget_url(widget: str, symbol: str) -> str:
@@ -96,9 +107,11 @@ def inject_css():
       @keyframes market-tape-scroll { from { transform:translateX(0); } to { transform:translateX(-50%); } }
       @media (prefers-reduced-motion: reduce) { .market-tape-track { animation:none; } }
       .source-note { color:#73808f; font-size:.72rem; margin:.5rem 0 1.1rem; }
-      .hero { padding: 2.3rem 2.5rem; border: 1px solid #29423e; border-radius: 22px;
+      .hero { position:relative; overflow:hidden; padding: 2.3rem 20rem 2.3rem 2.5rem; border: 1px solid #29423e; border-radius: 22px;
               background: linear-gradient(120deg, rgba(17,31,35,.96), rgba(12,18,26,.82)); box-shadow: 0 18px 50px rgba(0,0,0,.16); }
       .hero h1 { font-size: clamp(2.2rem, 4vw, 4.25rem); letter-spacing: -.065em; line-height: .95; margin: .5rem 0; }
+      .hero-gif { position:absolute; right:2rem; bottom:1.5rem; width:min(15.5rem, 22vw); border:1px solid rgba(43,212,164,.38); border-radius:14px; box-shadow:0 18px 42px rgba(0,0,0,.35); transform:rotate(1.5deg); }
+      @media (max-width: 900px) { .hero { padding-right:2.5rem; } .hero-gif { display:none; } }
       .glow { color: #2bd4a4; }
       .card { background: rgba(16,22,29,.88); border: 1px solid #242d37; border-radius: 16px; padding: 1rem 1.1rem; min-height: 110px; }
       .metric-label { color: #8d98a7; font-size: .76rem; text-transform: uppercase; letter-spacing: .09em; }
@@ -802,7 +815,9 @@ def dashboard(data: pd.DataFrame, updated: str):
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated} · no FOMO</div>
     </div>""", unsafe_allow_html=True)
     market_tape(data)
-    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · Nifty 200 desk</div><h1>more pehchaan.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>Start with the market pulse, open one clean chart, then take only the names worth researching further.</p><div class='header-chips'><span class='header-chip'><b>Pulse</b> see breadth & sectors</span><span class='header-chip'><b>Price</b> inspect a 1-year chart</span><span class='header-chip'><b>Proof</b> screen before you chase</span></div><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· no jaldibaazi, facts follow.</span></div></section>", unsafe_allow_html=True)
+    meme_gif = local_gif_data_uri("money-follows-my-brotha-ravi-kishan.gif")
+    meme_markup = f"<img class='hero-gif' src='{meme_gif}' alt='Ravi Kishan says money follows my brutha'>" if meme_gif else ""
+    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · Nifty 200 desk</div><h1>more pehchaan.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>Start with the market pulse, open one clean chart, then take only the names worth researching further.</p><div class='header-chips'><span class='header-chip'><b>Pulse</b> see breadth & sectors</span><span class='header-chip'><b>Price</b> inspect a 1-year chart</span><span class='header-chip'><b>Proof</b> screen before you chase</span></div><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· no jaldibaazi, facts follow.</span></div>{meme_markup}</section>", unsafe_allow_html=True)
     st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
