@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from gemini_screener import GeminiScreenerError, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
+from gemini_screener import GeminiScreenerError, ask_stock_comparison, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
 
 
 class GeminiScreenerTests(unittest.TestCase):
@@ -46,6 +47,13 @@ class GeminiScreenerTests(unittest.TestCase):
     def test_rejects_recommendation_like_research_output(self):
         with self.assertRaises(GeminiScreenerError):
             validate_chart_cues({"observations": ["Buy this stock."], "confirmation_checks": ["Check volume."], "limitations": ["EOD data only."]})
+
+    def test_comparison_chat_uses_selected_yahoo_fact_packet(self):
+        facts = {"source": "Yahoo Finance daily EOD data", "stocks": [{"symbol": "TCS", "pe": 25}, {"symbol": "RELIANCE", "pe": 20}]}
+        with patch("gemini_screener._generate_text", return_value="Reliance has the lower supplied P/E; compare it with your quality priority.") as generate:
+            answer = ask_stock_comparison("Which has the lower valuation?", facts, [], "test-key")
+        self.assertIn("Reliance", answer)
+        self.assertIn("TCS", generate.call_args.args[0])
 
 
 if __name__ == "__main__":

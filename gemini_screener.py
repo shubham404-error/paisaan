@@ -69,6 +69,27 @@ def build_chart_research_cues(facts: dict, api_key: str, model: str = DEFAULT_MO
     return validate_chart_cues(_generate_json(prompt, _chart_schema(), api_key, model))
 
 
+def ask_stock_comparison(question: str, yahoo_facts: dict, history: list[dict], api_key: str, model: str = DEFAULT_MODEL) -> str:
+    """Answer a comparison question from the selected stocks' Yahoo-only fact packet."""
+    clean_question = question.strip()
+    if not clean_question or len(clean_question) > _MAX_QUERY_LENGTH:
+        raise GeminiScreenerError("Ask a comparison question in 1 to 400 characters.")
+    recent_history = history[-6:]
+    prompt = (
+        "You are a concise Indian-equity research assistant. Answer the user's comparison question using ONLY the Yahoo Finance "
+        "facts for the selected stocks below. Do not mention missing data, generic disclaimers, exchange mechanics, or repeat a table. "
+        "Be decisive about trade-offs: use 'if your priority is X, Y is stronger on the supplied data' when supported. Do not guarantee "
+        "returns or invent facts. Keep the response to three short paragraphs or fewer.\n"
+        f"SELECTED YAHOO FACTS:\n{json.dumps(yahoo_facts, separators=(',', ':'), default=str)}\n"
+        f"RECENT CONVERSATION:\n{json.dumps(recent_history, separators=(',', ':'))}\n"
+        f"USER QUESTION: {clean_question}"
+    )
+    response = _generate_text(prompt, api_key, model)
+    if len(response) > 1200:
+        raise GeminiScreenerError("Gemini returned an overly long comparison response.")
+    return response
+
+
 def validate_gemini_screen(payload: object) -> tuple[list[FundamentalRule], str]:
     """Treat Gemini output as untrusted and reduce it to supported local filters."""
     if not isinstance(payload, dict) or not isinstance(payload.get("rules"), list):
@@ -185,6 +206,23 @@ def _generate_json(prompt: str, schema: dict, api_key: str, model: str) -> objec
         return json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
     except (HTTPError, URLError, TimeoutError, KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
         raise GeminiScreenerError("Gemini research is temporarily unavailable. Try again shortly.") from error
+
+
+def _generate_text(prompt: str, api_key: str, model: str) -> str:
+    if not api_key.strip():
+        raise GeminiScreenerError("Add GEMINI_API_KEY to Streamlit secrets to use AI research.")
+    payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 500}}
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    try:
+        request = Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+        with urlopen(request, timeout=25) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        text = body["candidates"][0]["content"]["parts"][0]["text"]
+    except (HTTPError, URLError, TimeoutError, KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise GeminiScreenerError("Gemini comparison chat is temporarily unavailable. Try again shortly.") from error
+    if not isinstance(text, str) or not text.strip():
+        raise GeminiScreenerError("Gemini returned an empty comparison response.")
+    return text.strip()
 
 
 def _prompt(query: str) -> str:

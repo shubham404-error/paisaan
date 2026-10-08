@@ -7,7 +7,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -164,6 +164,31 @@ def yahoo_fundamentals(symbols: tuple[str, ...]) -> pd.DataFrame:
     return fetch_yahoo_fundamentals(symbols)
 
 
+@st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading Yahoo Finance comparison data...")
+def yahoo_comparison_facts(symbols: tuple[str, ...]) -> dict:
+    """Build a Yahoo-only fact packet for an explicitly selected comparison set."""
+    fundamentals = yahoo_fundamentals(symbols).set_index("Symbol")
+    rows: list[dict] = []
+    for public_symbol in symbols:
+        history = yahoo_chart_history(yahoo_symbol(public_symbol), "1y", "1d", ADJUSTMENT_CONTRACT)
+        latest = history.iloc[-1]
+        row = {
+            "symbol": public_symbol,
+            "as_of": latest["Date"].strftime("%Y-%m-%d"),
+            "close": latest["Close"],
+            "rsi_14": latest["RSI14"],
+            "ema_9": latest["EMA9"],
+            "ema_21": latest["EMA21"],
+            "sma_50": latest["SMA50"],
+            "sma_200": latest["SMA200"],
+            "volume_vs_20d_average": (latest["Volume"] / latest["VolumeSMA20"]) if pd.notna(latest["VolumeSMA20"]) and latest["VolumeSMA20"] else None,
+        }
+        if public_symbol in fundamentals.index:
+            row.update(fundamentals.loc[public_symbol, ["pe", "pb", "roe", "dividend_yield", "market_cap_cr"]].to_dict())
+        rows.append(row)
+    return {"source": "Yahoo Finance daily EOD data", "stocks": json.loads(pd.DataFrame(rows).to_json(orient="records", date_format="iso"))}
+
+
 def gain(value: float) -> str:
     return f"<span class='{ 'gain' if value >= 0 else 'loss' }'>{value:+.2f}%</span>"
 
@@ -306,6 +331,51 @@ def chart_research_cues(history: pd.DataFrame, symbol: str, range_label: str) ->
             render_research_list("Observations", cues["observations"])
             render_research_list("Confirmation checks", cues["confirmation_checks"])
             render_research_list("Limitations", cues["limitations"])
+
+
+def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> None:
+    """Open a Yahoo-only, session-scoped comparison chat for user-selected stocks."""
+    with st.expander("Compare stocks with AI", expanded=False):
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to enable stock comparison chat.")
+            return
+        selected_symbols = st.multiselect("Choose 2 to 5 stocks", result["Symbol"].tolist(), max_selections=5, key="comparison-chat-symbols")
+        if selected_symbols and len(selected_symbols) < 2:
+            st.caption("Choose at least two stocks to begin a comparison.")
+            return
+        if len(selected_symbols) < 2:
+            return
+        symbols = tuple(sorted(selected_symbols))
+        chat_key = f"yahoo-comparison-chat:v1:{','.join(symbols)}"
+        if st.button("Start comparison chat", key=f"start-{chat_key}"):
+            try:
+                st.session_state[chat_key] = {"facts": yahoo_comparison_facts(symbols), "messages": []}
+            except (YahooChartError, ValueError) as error:
+                st.warning(f"Yahoo Finance comparison data is temporarily unavailable: {error}")
+                return
+        chat = st.session_state.get(chat_key)
+        if chat is None:
+            st.caption("Loads Yahoo Finance fundamentals and daily technical snapshots only for the stocks you chose.")
+            return
+        st.caption(f"Yahoo Finance data loaded for {', '.join(symbols)}. Ask what matters to your decision.")
+        for message in chat["messages"]:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        question = st.chat_input("Ask about these selected stocks", key=f"ask-{chat_key}")
+        if question:
+            chat["messages"].append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Comparing the selected Yahoo Finance data..."):
+                    try:
+                        answer = ask_stock_comparison(question, chat["facts"], chat["messages"][:-1], api_key, gemini_model)
+                    except GeminiScreenerError as error:
+                        st.warning(str(error))
+                        return
+                st.markdown(answer)
+            chat["messages"].append({"role": "assistant", "content": answer})
 
 
 def mover_row(row: pd.Series) -> None:
