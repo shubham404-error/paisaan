@@ -84,12 +84,12 @@ def sector_snapshot() -> tuple[pd.DataFrame, str | None]:
 
 
 @st.cache_data(ttl=120, show_spinner="Applying technical screen…")
-def screened_stocks(industry: str | None, min_rsi: float | None, min_volume_ratio: float | None, above_sma50: bool, min_return_1m: float | None) -> tuple[pd.DataFrame, str | None]:
-    params = {"industry": industry, "min_rsi": min_rsi, "min_volume_ratio": min_volume_ratio, "above_sma50": above_sma50, "min_return_1m": min_return_1m, "limit": 200}
+def screened_stocks(industry: str | None, min_rsi: float | None, min_volume_ratio: float | None, above_sma50: bool, min_return_1m: float | None, above_sma200: bool, min_return_3m: float | None, min_relative_strength: float | None, near_52w_high: float | None) -> tuple[pd.DataFrame, dict]:
+    params = {"industry": industry, "min_rsi": min_rsi, "min_volume_ratio": min_volume_ratio, "above_sma50": above_sma50, "min_return_1m": min_return_1m, "above_sma200": above_sma200, "min_return_3m": min_return_3m, "min_rel_strength_6m": min_relative_strength, "near_52w_high_pct": near_52w_high, "limit": 200}
     response = httpx.get(f"{API_BASE_URL}/v1/screener", params={key: value for key, value in params.items() if value is not None}, timeout=15)
     response.raise_for_status()
     payload = response.json()
-    return pd.DataFrame(payload.get("matches", [])), payload.get("as_of")
+    return pd.DataFrame(payload.get("matches", [])), payload
 
 
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
@@ -190,14 +190,21 @@ def screener(data: pd.DataFrame):
     min_rsi = y.number_input("Minimum RSI-14", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
     min_volume = z.number_input("Minimum volume ratio", min_value=0.0, value=0.0, step=0.1)
     above_sma50 = w.toggle("Price above SMA-50", value=False)
-    min_return = st.number_input("Minimum 1-month return (%)", value=0.0, step=1.0)
-    result, as_of = screened_stocks(industry if industry != "All" else None, min_rsi if min_rsi > 0 else None, min_volume if min_volume > 0 else None, above_sma50, min_return if min_return != 0 else None)
+    a, b, c, d = st.columns(4)
+    min_return = a.number_input("Minimum 1-month return (%)", value=0.0, step=1.0)
+    min_return_3m = b.number_input("Minimum 3-month return (%)", value=0.0, step=1.0)
+    above_sma200 = c.toggle("Price above SMA-200", value=False)
+    min_relative_strength = d.number_input("Minimum 6-month strength rank", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
+    near_52w_high = st.number_input("Within % of 52-week high", min_value=0.0, max_value=100.0, value=0.0, step=2.5, help="For example, 5 keeps stocks no more than 5% below their 52-week high.")
+    result, metadata = screened_stocks(industry if industry != "All" else None, min_rsi if min_rsi > 0 else None, min_volume if min_volume > 0 else None, above_sma50, min_return if min_return != 0 else None, above_sma200, min_return_3m if min_return_3m != 0 else None, min_relative_strength if min_relative_strength > 0 else None, near_52w_high if near_52w_high > 0 else None)
+    coverage = f"{metadata.get('technical_coverage', 0)} / {metadata.get('universe_count', 200)}"
+    st.caption(f"Technical coverage: {coverage} Nifty 200 stocks · snapshot date: {metadata.get('as_of') or 'not available'}")
     if result.empty:
         st.info("No completed technical snapshots match these filters yet. Historical backfill will expand screen coverage.")
         return
-    shown = result.rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Close", "rsi14": "RSI-14", "sma50": "SMA-50", "sma200": "SMA-200", "volume_ratio_20d": "Volume ratio", "return_1m": "1M return", "return_1y": "1Y return"})
+    shown = result.rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Close", "rsi14": "RSI-14", "sma50": "SMA-50", "sma200": "SMA-200", "volume_ratio_20d": "Volume ratio", "rel_strength_6m": "6M strength rank", "return_1m": "1M return", "return_3m": "3M return", "return_1y": "1Y return", "distance_high_52w": "Distance to 52W high"})
     st.dataframe(shown, use_container_width=True, hide_index=True)
-    st.caption(f"{len(result)} technical matches · snapshot date: {as_of or 'not available'}")
+    st.caption(f"{len(result)} technical matches")
 
 
 def charts(data: pd.DataFrame):

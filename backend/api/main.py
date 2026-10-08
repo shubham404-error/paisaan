@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.schemas import HealthResponse, MarketOverviewResponse
 from backend.core.config import get_settings
-from backend.db.database import Base, engine
+from backend.db.schema import ensure_local_schema
 from backend import db as _db  # ensures database package is registered
 import backend.db.models  # registers model metadata before local initialization
 from backend.services.market import bars, overview, screen, sectors
@@ -16,8 +16,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_cr
 @app.on_event("startup")
 def create_local_schema() -> None:
     """Convenience only for local SQLite; production uses versioned migrations."""
-    if settings.database_url.startswith("sqlite"):
-        Base.metadata.create_all(bind=engine)
+    ensure_local_schema()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -46,5 +45,19 @@ def market_sectors() -> dict:
 
 
 @app.get("/v1/screener")
-def market_screener(industry: str | None = None, min_rsi: float | None = Query(None, ge=0, le=100), min_volume_ratio: float | None = Query(None, ge=0), above_sma50: bool | None = None, min_return_1m: float | None = None, limit: int = Query(100, ge=1, le=200)) -> dict:
-    return screen(industry, min_rsi, min_volume_ratio, above_sma50, min_return_1m, limit)
+def market_screener(
+    industry: str | None = None,
+    min_rsi: float | None = Query(None, ge=0, le=100),
+    min_volume_ratio: float | None = Query(None, ge=0),
+    above_sma50: bool | None = None,
+    min_return_1m: float | None = None,
+    above_sma200: bool | None = None,
+    min_return_3m: float | None = None,
+    min_rel_strength_6m: float | None = Query(None, ge=0, le=100),
+    near_52w_high_pct: float | None = Query(None, ge=0, le=100),
+    new_52w_high: bool | None = None,
+    volume_spike: bool | None = None,
+    golden_cross: bool | None = None,
+    limit: int = Query(100, ge=1, le=200),
+) -> dict:
+    return screen(industry, min_rsi, min_volume_ratio, above_sma50, min_return_1m, above_sma200, min_return_3m, min_rel_strength_6m, near_52w_high_pct, new_52w_high, volume_spike, golden_cross, limit)

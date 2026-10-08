@@ -105,19 +105,10 @@ def calculate_latest_technicals(session: Session, symbol: str) -> dict:
     bars = session.scalars(select(DailyBar).where(DailyBar.instrument_id == instrument.id).order_by(DailyBar.trading_date)).all()
     if not bars:
         return {"symbol": symbol, "status": "no_bars"}
-    frame = pd.DataFrame([{"date": item.trading_date, "close": item.close, "volume": item.volume} for item in bars])
-    close, volume = frame["close"], frame["volume"]
-    delta = close.diff()
-    gains, losses = delta.clip(lower=0), -delta.clip(upper=0)
-    average_gain, average_loss = gains.rolling(14).mean(), losses.rolling(14).mean()
-    rsi = 100 - (100 / (1 + average_gain / average_loss.replace(0, float("nan"))))
+    frame = pd.DataFrame([{"date": item.trading_date, "open": item.open, "high": item.high, "low": item.low, "close": item.close, "volume": item.volume, "turnover": item.turnover or item.close * item.volume} for item in bars])
     latest = frame.iloc[-1]
     snapshot = session.scalar(select(TechnicalSnapshot).where(TechnicalSnapshot.instrument_id == instrument.id, TechnicalSnapshot.trading_date == latest.date))
-    values = {
-        "sma50": _value(close.rolling(50).mean().iloc[-1]), "sma200": _value(close.rolling(200).mean().iloc[-1]),
-        "rsi14": _value(rsi.iloc[-1]), "volume_ratio_20d": _ratio(volume.iloc[-1], volume.rolling(20).mean().iloc[-1]),
-        "return_1m": _return(close, 21), "return_1y": _return(close, 252),
-    }
+    values = _technical_values(frame)
     if snapshot:
         for field, value in values.items():
             setattr(snapshot, field, value)
@@ -125,6 +116,41 @@ def calculate_latest_technicals(session: Session, symbol: str) -> dict:
         session.add(TechnicalSnapshot(instrument_id=instrument.id, trading_date=latest.date, **values))
     session.commit()
     return {"symbol": symbol, "as_of": latest.date.isoformat(), **values}
+
+
+def calculate_universe_technicals(session: Session) -> dict:
+    """Compute cross-sectional indicators after all constituent histories are available."""
+    instruments = session.scalars(select(Instrument).where(Instrument.active.is_(True))).all()
+    frames: dict[int, pd.DataFrame] = {}
+    for instrument in instruments:
+        bars = session.scalars(select(DailyBar).where(DailyBar.instrument_id == instrument.id).order_by(DailyBar.trading_date)).all()
+        if bars:
+            frames[instrument.id] = pd.DataFrame([{"date": bar.trading_date, "close": bar.close} for bar in bars]).set_index("date")
+    if not frames:
+        return {"updated": 0}
+    closes = pd.concat({instrument_id: frame["close"] for instrument_id, frame in frames.items()}, axis=1).sort_index()
+    equal_weight_returns = closes.pct_change().mean(axis=1)
+    updated = 0
+    for instrument in instruments:
+        frame = frames.get(instrument.id)
+        if frame is None:
+            continue
+        stock_returns = frame["close"].pct_change()
+        aligned = pd.concat([stock_returns, equal_weight_returns], axis=1).dropna().tail(252)
+        beta = None
+        if len(aligned) > 20 and aligned.iloc[:, 1].var() != 0:
+            beta = _value(aligned.iloc[:, 0].cov(aligned.iloc[:, 1]) / aligned.iloc[:, 1].var())
+        six_month_return = _return(frame["close"], 126)
+        peers = closes.pct_change(126).iloc[-1].dropna()
+        rs_rank = float(peers.rank(pct=True).get(instrument.id, float("nan")) * 100) if not peers.empty else float("nan")
+        latest_date = frame.index[-1]
+        snapshot = session.scalar(select(TechnicalSnapshot).where(TechnicalSnapshot.instrument_id == instrument.id, TechnicalSnapshot.trading_date == latest_date))
+        if snapshot:
+            snapshot.beta_equal_weight = beta
+            snapshot.rel_strength_6m = _value(rs_rank)
+            updated += 1
+    session.commit()
+    return {"updated": updated}
 
 
 def calculate_sector_metrics(session: Session, trading_date: date | None = None) -> int:
@@ -170,3 +196,39 @@ def _return(close: pd.Series, periods: int) -> float | None:
     if len(close) <= periods:
         return None
     return round(float((close.iloc[-1] / close.iloc[-periods - 1] - 1) * 100), 4)
+
+
+def _technical_values(frame: pd.DataFrame) -> dict:
+    close, high, low, volume, turnover = frame["close"], frame["high"], frame["low"], frame["volume"], frame["turnover"]
+    sma = {window: close.rolling(window).mean() for window in (20, 50, 100, 200)}
+    ema = {window: close.ewm(span=window, adjust=False).mean() for window in (20, 50, 100, 200)}
+    delta = close.diff()
+    gains, losses = delta.clip(lower=0), -delta.clip(upper=0)
+    average_gain, average_loss = gains.rolling(14).mean(), losses.rolling(14).mean()
+    relative_strength = average_gain / average_loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + relative_strength))
+    rsi = rsi.mask((average_loss == 0) & (average_gain > 0), 100).mask((average_gain == 0) & (average_loss > 0), 0)
+    previous_close = close.shift(1)
+    true_range = pd.concat([high - low, (high - previous_close).abs(), (low - previous_close).abs()], axis=1).max(axis=1)
+    atr = true_range.rolling(14).mean()
+    high52, low52 = high.rolling(252).max(), low.rolling(252).min()
+    latest_close = close.iloc[-1]
+    distances = {window: _value((latest_close / series.iloc[-1] - 1) * 100) if not pd.isna(series.iloc[-1]) else None for window, series in sma.items()}
+    ma_gap = sma[50] - sma[200]
+    golden = bool(((ma_gap > 0) & (ma_gap.shift(1) <= 0)).tail(20).any()) if len(close) >= 201 else False
+    death = bool(((ma_gap < 0) & (ma_gap.shift(1) >= 0)).tail(20).any()) if len(close) >= 201 else False
+    max_drawdown = ((close.tail(252) / close.tail(252).cummax()) - 1).min() * 100 if len(close) >= 2 else float("nan")
+    return {
+        "sma20": _value(sma[20].iloc[-1]), "sma50": _value(sma[50].iloc[-1]), "sma100": _value(sma[100].iloc[-1]), "sma200": _value(sma[200].iloc[-1]),
+        "ema20": _value(ema[20].iloc[-1]), "ema50": _value(ema[50].iloc[-1]), "ema100": _value(ema[100].iloc[-1]), "ema200": _value(ema[200].iloc[-1]),
+        "d20": distances[20], "d50": distances[50], "d100": distances[100], "d200": distances[200],
+        "above_ma_count": sum(value is not None and value > 0 for value in distances.values()), "rsi14": _value(rsi.iloc[-1]),
+        "atr14_pct": _value(atr.iloc[-1] / latest_close * 100), "vol1y": _value(close.pct_change().tail(252).std() * (252 ** 0.5) * 100), "maxdd1y": _value(max_drawdown),
+        "return_1d": _return(close, 1), "return_1w": _return(close, 5), "return_1m": _return(close, 21), "return_3m": _return(close, 63), "return_6m": _return(close, 126), "return_1y": _return(close, 252),
+        "return_3y_cagr": _value(((latest_close / close.iloc[-757]) ** (1 / 3) - 1) * 100) if len(close) > 756 else None,
+        "volume_ratio_20d": _ratio(volume.iloc[-1], volume.rolling(20).mean().iloc[-1]), "avg_volume_20d": _value(volume.rolling(20).mean().iloc[-1]), "avg_turnover_20d": _value(turnover.rolling(20).mean().iloc[-1]), "volume_spikes_20d": int((volume.tail(20) > volume.rolling(20).mean().tail(20) * 2).sum()) if len(volume) >= 20 else 0,
+        "high_52w": _value(high52.iloc[-1]), "low_52w": _value(low52.iloc[-1]), "distance_high_52w": _value((latest_close / high52.iloc[-1] - 1) * 100) if not pd.isna(high52.iloc[-1]) else None, "distance_low_52w": _value((latest_close / low52.iloc[-1] - 1) * 100) if not pd.isna(low52.iloc[-1]) else None,
+        "position_52w": _value((latest_close - low52.iloc[-1]) / (high52.iloc[-1] - low52.iloc[-1]) * 100) if not pd.isna(high52.iloc[-1]) and high52.iloc[-1] != low52.iloc[-1] else None,
+        "new_52w_high": bool(latest_close >= high52.iloc[-1]) if not pd.isna(high52.iloc[-1]) else False, "new_52w_low": bool(latest_close <= low52.iloc[-1]) if not pd.isna(low52.iloc[-1]) else False,
+        "golden_cross_20d": golden, "death_cross_20d": death,
+    }
