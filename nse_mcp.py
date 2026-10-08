@@ -20,7 +20,10 @@ async def _call(tool_name: str, arguments: dict[str, Any], endpoint: str) -> Any
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    async with streamable_http_client(endpoint) as streams:
+    # NSE MCP currently returns 501 when a client sends the optional session
+    # termination request. Closing the transport without that request is the
+    # supported, quiet path for this stateless request/response use case.
+    async with streamable_http_client(endpoint, terminate_on_close=False) as streams:
         # MCP 1.x returned a third callback; newer releases return two streams.
         read_stream, write_stream = streams[:2]
         async with ClientSession(read_stream, write_stream) as session:
@@ -45,7 +48,7 @@ def list_tools(endpoint: str = CM_MARKET_URL) -> list[str]:
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
-        async with streamable_http_client(endpoint) as streams:
+        async with streamable_http_client(endpoint, terminate_on_close=False) as streams:
             read_stream, write_stream = streams[:2]
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()

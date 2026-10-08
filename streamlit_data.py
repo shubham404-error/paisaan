@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
+import re
 import time
 from urllib.request import Request, urlopen
 
@@ -17,6 +18,7 @@ from nse_mcp import BHAVCOPY_URL, call_nse_tool
 
 NIFTY_200_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
 RETRY_ATTEMPTS = 3
+SYMBOL_PATTERN = re.compile(r"^[A-Z0-9&-]{1,32}$")
 
 
 def _retry(operation, description: str):
@@ -30,6 +32,18 @@ def _retry(operation, description: str):
             if attempt < RETRY_ATTEMPTS - 1:
                 time.sleep(2 ** attempt)
     raise RuntimeError(f"NSE request failed while loading {description}. Please retry shortly.") from last_error
+
+
+def _validate_ohlcv(row: dict, context: str) -> None:
+    """Reject malformed exchange rows before they reach charts or screens."""
+    try:
+        open_price, high, low = float(row["open"]), float(row["high"]), float(row["low"])
+        close = float(row.get("close", row.get("ltp")))
+        volume = int(row["volume"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"NSE supplied incomplete {context} data.") from error
+    if min(open_price, high, low, close) <= 0 or volume < 0 or high < low or not low <= close <= high:
+        raise ValueError(f"NSE supplied invalid {context} OHLCV data.")
 
 
 def fetch_constituents() -> list[dict]:
@@ -55,18 +69,26 @@ def fetch_quotes(constituents: list[dict]) -> list[dict]:
     rows = [{**item, **by_symbol[item["symbol"]]} for item in constituents if item["symbol"] in by_symbol]
     if len(rows) != 200:
         raise RuntimeError(f"NSE Bhavcopy returned {len(rows)} of 200 verified Nifty 200 quotes. Try again shortly.")
+    for row in rows:
+        _validate_ohlcv(row, "quote")
     return rows
 
 
 def fetch_history(symbol: str, months: int) -> list[dict]:
     """Get a single symbol's historical bars. Use only on the chart/detail path."""
+    symbol = symbol.upper()
+    if not SYMBOL_PATTERN.fullmatch(symbol) or not 1 <= months <= 36:
+        raise ValueError("Unsupported NSE symbol or history range.")
     rows, end_date, remaining = [], "today", months
     while remaining > 0:
         chunk = min(3, remaining)
-        response = _retry(lambda: call_nse_tool("get_stock_history", {"symbol": symbol.upper(), "months": chunk, "endDate": end_date}, BHAVCOPY_URL), f"{symbol.upper()} history")
+        response = _retry(lambda: call_nse_tool("get_stock_history", {"symbol": symbol, "months": chunk, "endDate": end_date}, BHAVCOPY_URL), f"{symbol} history")
         rows.extend(response.get("data", []))
         end_date = response.get("next_end_date")
         if not end_date:
             break
         remaining -= chunk
-    return sorted({row["date"]: row for row in rows}.values(), key=lambda row: row["date"])
+    normalized = sorted({row["date"]: row for row in rows}.values(), key=lambda row: row["date"])
+    for row in normalized:
+        _validate_ohlcv(row, "historical")
+    return normalized

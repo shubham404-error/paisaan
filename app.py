@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -10,6 +12,10 @@ from chart_technicals import add_technicals, technical_summary
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
 ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
+
+
+def safe_text(value: object) -> str:
+    return escape(str(value))
 
 
 def inject_css():
@@ -132,7 +138,7 @@ def gain(value: float) -> str:
 def mover_row(row: pd.Series) -> None:
     strength = min(abs(row["Change %"]) / 8 * 100, 100)
     color = GREEN if row["Change %"] >= 0 else RED
-    st.markdown(f"<div class='feed'><b>{row['Symbol']}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{row['Company']} · ₹{row['Price']:,.2f}</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='feed'><b>{safe_text(row['Symbol'])}</b><span style='float:right'>{gain(row['Change %'])}</span><br><span class='small-note'>{safe_text(row['Company'])} · ₹{row['Price']:,.2f}</span><div class='move-bar'><div class='move-fill' style='width:{strength:.0f}%;background:{color}'></div></div></div>", unsafe_allow_html=True)
 
 
 def dashboard(data: pd.DataFrame, updated: str):
@@ -141,7 +147,7 @@ def dashboard(data: pd.DataFrame, updated: str):
         sentiment = "Sector analytics will appear after the initial market-close ingestion completes."
     else:
         leader, laggard = sectors.iloc[0], sectors.iloc[-1]
-        sentiment = f"{leader.industry} leads the Nifty 200 universe ({leader.average_change_pct:+.2f}% equal-weight); {laggard.industry} trails ({laggard.average_change_pct:+.2f}%)."
+        sentiment = f"{safe_text(leader.industry)} leads the Nifty 200 universe ({leader.average_change_pct:+.2f}% equal-weight); {safe_text(laggard.industry)} trails ({laggard.average_change_pct:+.2f}%)."
     st.markdown(f"""<div class='topbar'>
       <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
       <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated}</div>
@@ -178,7 +184,7 @@ def dashboard(data: pd.DataFrame, updated: str):
     else:
         for column, (_, sector) in zip(sector_cols, sectors.head(4).iterrows()):
             dot = GREEN if sector.average_change_pct >= 0 else RED
-            column.markdown(f"<div class='sector-chip'><i class='sector-dot' style='background:{dot}'></i><b>{sector.industry}</b><span style='margin-left:auto'>{gain(sector.average_change_pct)}</span></div><div class='small-note'>{int(sector.advancers)} up · {int(sector.decliners)} down · {int(sector.members)} stocks</div>", unsafe_allow_html=True)
+            column.markdown(f"<div class='sector-chip'><i class='sector-dot' style='background:{dot}'></i><b>{safe_text(sector.industry)}</b><span style='margin-left:auto'>{gain(sector.average_change_pct)}</span></div><div class='small-note'>{int(sector.advancers)} up · {int(sector.decliners)} down · {int(sector.members)} stocks</div>", unsafe_allow_html=True)
         shown_sectors = sectors[["industry", "members", "average_change_pct", "advancers", "decliners", "turnover"]].copy()
         shown_sectors["average_change_pct"] = shown_sectors["average_change_pct"].map(lambda value: f"{value:+.2f}%")
         shown_sectors["turnover"] = shown_sectors["turnover"].map(lambda value: f"₹{value / 10_000_000:,.1f} Cr")
@@ -257,4 +263,11 @@ with st.sidebar:
     st.caption("Official Nifty 200 constituents · cached in Streamlit")
     st.caption("Market data is informational only; it is not investment advice.")
 
-{"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data)
+if page == "Dashboard":
+    dashboard(data, updated)
+elif page == "Screener":
+    screener(data)
+elif page == "Charts":
+    charts(data)
+else:
+    watchlist(data)
