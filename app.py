@@ -33,13 +33,23 @@ def trendlyne_widget_url(widget: str, symbol: str) -> str:
     if widget not in {"qvt-widget", "swot-widget", "technical-widget"}:
         raise ValueError("Unsupported Trendlyne widget.")
     encoded_symbol = quote(symbol.strip().upper(), safe="")
-    palette = urlencode({"posCol": "2BD4A4", "primaryCol": "2BD4A4", "negCol": "FF6B6B", "neuCol": "F0A51A"})
+    palette = urlencode({"posCol": "2BD4A4", "primaryCol": "2BD4A4", "negCol": "FF6B6B", "neuCol": "F0A51A", "theme": "light"})
     return f"{TRENDLYNE_WIDGET_BASE_URL}/{widget}/Poppins/{encoded_symbol}/?{palette}"
 
 
 def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
     """Render third-party widget in an isolated iframe so provider JS stays outside the app."""
-    components.iframe(trendlyne_widget_url(widget, symbol), height=height, scrolling=True)
+    url = trendlyne_widget_url(widget, symbol)
+    if widget == "swot-widget":
+        # Trendlyne's SWOT page uses dark text but a transparent page background.
+        # A light host canvas keeps its provider content readable inside paisaan's dark UI.
+        components.html(
+            f"""<style>html,body{{margin:0;background:#f7faf9;overflow:hidden}}iframe{{display:block;width:100%;height:{height}px;border:0;background:#f7faf9}}</style><iframe src=\"{escape(url, quote=True)}\" scrolling=\"yes\" title=\"Trendlyne SWOT\"></iframe>""",
+            height=height,
+            scrolling=False,
+        )
+        return
+    components.iframe(url, height=height, scrolling=True)
 
 
 @st.cache_resource
