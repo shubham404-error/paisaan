@@ -26,9 +26,9 @@ https://mcp.nseindia.in/cmmkt/mcp
 https://mcp.nseindia.in/bhavcopy/cm/mcp
 ```
 
-The app first loads the official Nifty 200 constituent list from NSE Indices, then quotes every constituent through the Bhavcopy MCP `get_bulk_quote` tool in batches. The Charts screen fetches historical Bhavcopy data only for the selected symbol and caches it, avoiding an expensive full-history reload on each visit.
+The app first loads the official Nifty 200 constituent list from NSE Indices, then quotes every constituent through the Bhavcopy MCP `get_bulk_quote` tool in batches. Selected-symbol charts are served from Yahoo Finance daily data and cached in the Streamlit runtime.
 
-The Screener is intentionally based on the complete cached EOD quote snapshot (industry, daily move, volume, price range). A Streamlit-only deployment cannot reliably run a persistent 200-stock, three-year backfill or scheduled technical pipeline; advanced historical metrics remain available in the repository's optional backend path for a future infrastructure upgrade.
+The Screener begins with the complete cached EOD quote snapshot (industry, daily move, volume, price range). It can optionally enrich a user-requested shortlist with Yahoo Finance P/E, P/B, ROE, dividend yield, and market cap. If `GEMINI_API_KEY` is configured in Streamlit secrets, Gemini translates normal-language requests into that same small, validated filter set; it does not make market-data requests or recommendations.
 
 The Dashboard preview and Charts view use Yahoo Finance daily data for the selected Nifty 200 stock only. They retain raw Close, build adjusted OHLC consistently from Adjusted Close, then render Terminal-compatible EMA/SMA, volume, RSI, and bullish-crossover signals. Provider failures are controlled and retain the last valid chart for the active session.
 

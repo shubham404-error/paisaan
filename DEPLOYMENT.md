@@ -15,12 +15,14 @@
 2. Create a new app from the repository, with `app.py` as the entrypoint.
 3. Use Python 3.11 or later and let Community Cloud install `requirements.txt`.
 4. Do not configure `STREAMLIT_API_BASE_URL`; the production app does not use a separate API.
-5. Open the deployed URL and repeat the pre-publish checks.
+5. Optional AI screener: add `GEMINI_API_KEY` to App settings > Secrets (see `.streamlit/secrets.toml.example`). Never add the key to source control. `GEMINI_MODEL` is optional and defaults to `gemini-3.5-flash-lite`.
+6. Open the deployed URL and repeat the pre-publish checks.
 
 ## Operating limits
 
 - NSE MCP is an upstream public service. The app retries failed constituent and quote requests three times with backoff, then presents a retry button.
 - Yahoo Finance supplies selected-symbol daily charts. A Yahoo rate limit or provider error leaves the last valid session chart available.
-- Market data is cached in the Streamlit runtime: quotes for 10 minutes and Yahoo charts for four hours.
+- Market data is cached in the Streamlit runtime: quotes for 10 minutes, Yahoo charts for four hours, and Yahoo screener fundamentals for six hours.
+- Gemini is an optional text-to-filter interpreter. Its output is validated against the Screener's fixed set of fundamental fields and operators before Yahoo data is requested.
 - Session-only watchlists are deliberately hidden until a persistent, authenticated implementation is available.
 - The full-universe screener uses cached EOD fields. A durable 200-stock historical technical screen needs external persistence and scheduled workers, which are deliberately outside this Streamlit-only deployment.

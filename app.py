@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from html import escape
+import os
 
 import pandas as pd
 import streamlit as st
 
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, translate_screener_request
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -23,6 +25,17 @@ def safe_text(value: object) -> str:
 def refresh_gate() -> RefreshGate:
     """Share explicit-refresh protection across users on this app instance."""
     return RefreshGate(cooldown_seconds=60)
+
+
+def gemini_settings() -> tuple[str, str]:
+    """Read optional AI configuration without exposing a key in UI or source control."""
+    try:
+        api_key = str(st.secrets.get("GEMINI_API_KEY", ""))
+        model = str(st.secrets.get("GEMINI_MODEL", DEFAULT_MODEL))
+    except FileNotFoundError:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        model = os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
+    return api_key.strip(), model.strip() or DEFAULT_MODEL
 
 
 def inject_css():
@@ -282,28 +295,41 @@ def screener(data: pd.DataFrame):
         preset_copy = "Negative daily movers"
 
     fundamental_query = st.text_input(
-        "Custom fundamental screen (Yahoo Finance)",
-        placeholder="PE under 25 and ROE above 15% and market cap over 50000 crore",
-        help="Supported: PE, P/B, ROE, dividend yield and market cap; use under, below, above, over, at least or at most.",
+        "Describe your fundamental screen",
+        placeholder="Find reasonably valued companies with strong returns on equity and a dividend",
+        help="AI can translate normal language into the available Yahoo Finance filters: P/E, P/B, ROE, dividend yield and market cap.",
     )
     if fundamental_query.strip():
+        api_key, gemini_model = gemini_settings()
+        ai_enabled = st.toggle("Use Gemini to interpret my request", value=bool(api_key), disabled=not bool(api_key))
+        if not api_key:
+            st.caption("Add GEMINI_API_KEY in Streamlit secrets to enable AI interpretation. Manual rules such as 'PE under 25 and ROE above 15%' still work.")
+        rules = None
         try:
-            rules = parse_fundamental_query(fundamental_query)
+            if ai_enabled:
+                interpretation_key = f"gemini-rules:{fundamental_query.strip()}"
+                if st.button("Interpret with Gemini", type="primary"):
+                    st.session_state[interpretation_key] = translate_screener_request(fundamental_query, api_key, gemini_model)
+                interpretation = st.session_state.get(interpretation_key)
+                if interpretation is None:
+                    st.info("Gemini will translate your sentence into supported, reviewable filters before Yahoo Finance data is requested.")
+                    return
+                rules, summary = interpretation
+                st.caption(f"Gemini interpretation: {safe_text(summary)}")
+            else:
+                rules = parse_fundamental_query(fundamental_query)
             rule_summary = " and ".join(f"{FIELD_LABELS[rule.field]} {rule.operator} {rule.value:g}" for rule in rules)
-            st.caption(f"Parsed rules: {rule_summary}")
+            st.caption(f"Applied rules: {rule_summary}")
             fundamental_key = f"fundamentals:{tuple(result['Symbol'].tolist())}"
-            if st.button(f"Run fundamental screen across {len(result)} stocks", type="primary"):
+            if st.button(f"Run fundamental screen across {len(result)} stocks"):
                 st.session_state[fundamental_key] = yahoo_fundamentals(tuple(result["Symbol"].tolist()))
             fundamentals = st.session_state.get(fundamental_key)
             if fundamentals is None:
-                st.info("Your Yahoo fundamental query is ready. Run it when you want to enrich this EOD shortlist; results are cached for six hours.")
+                st.info("Rules are ready. Run the screen when you want to enrich this EOD shortlist; results are cached for six hours.")
                 return
             result = filter_fundamentals(result.merge(fundamentals, on="Symbol", how="left"), rules)
             preset_copy = f"{preset_copy} plus Yahoo fundamentals"
-        except ValueError as error:
-            st.warning(str(error))
-            return
-        except YahooChartError as error:
+        except (ValueError, GeminiScreenerError, YahooChartError) as error:
             st.warning(str(error))
             return
 
