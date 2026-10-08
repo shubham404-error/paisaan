@@ -139,6 +139,7 @@ def market_chart(
     days: int = 180,
     rsi_lines: list[tuple[float, str]] | None = None,
     height: int = 690,
+    show_volume_sma: bool = True,
 ) -> go.Figure:
     """Three-panel Terminal-compatible daily candlestick chart."""
     chart = frame.sort_values("Date").tail(days).copy()
@@ -148,15 +149,21 @@ def market_chart(
     for column in overlays:
         if column in chart.columns and chart[column].notna().any():
             figure.add_trace(go.Scatter(x=chart["Date"], y=chart[column], mode="lines", name=column, line={"width": 1.8, "color": colors.get(column, "#cbd5e1")}), row=1, col=1)
-    labels = {"Cross9_21": "9/21 Bullish Cross", "Cross20_50": "20/50 Bullish Cross", "Cross50_200": "Golden Cross"}
-    for column, label in labels.items():
+    labels = {
+        "Cross9_21": ("9/21 Bullish Cross", {"EMA9", "EMA21"}),
+        "Cross20_50": ("20/50 Bullish Cross", {"SMA20", "SMA50"}),
+        "Cross50_200": ("Golden Cross", {"SMA50", "SMA200"}),
+    }
+    for column, (label, required_overlays) in labels.items():
+        if not required_overlays.issubset(overlays):
+            continue
         if column not in chart:
             continue
         marks = chart.loc[chart[column].fillna(False)]
         if not marks.empty:
             figure.add_trace(go.Scatter(x=marks["Date"], y=marks["Close"], mode="markers", name=label, marker={"symbol": "triangle-up", "size": 9, "color": "#2bd4a4", "line": {"color": "#080a0d", "width": 1}}), row=1, col=1)
     figure.add_trace(go.Bar(x=chart["Date"], y=chart["Volume"], name="Volume", marker_color="#64748b"), row=2, col=1)
-    if "VolumeSMA20" in chart.columns and chart["VolumeSMA20"].notna().any():
+    if show_volume_sma and "VolumeSMA20" in chart.columns and chart["VolumeSMA20"].notna().any():
         figure.add_trace(go.Scatter(x=chart["Date"], y=chart["VolumeSMA20"], mode="lines", name="20D Avg Vol", line={"width": 1.3, "color": "#f0a51a"}), row=2, col=1)
     if "RSI14" in chart.columns and chart["RSI14"].notna().any():
         figure.add_trace(go.Scatter(x=chart["Date"], y=chart["RSI14"], mode="lines", name="RSI14", line={"width": 1.7, "color": "#8ab4ff"}), row=3, col=1)

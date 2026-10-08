@@ -804,13 +804,16 @@ def dashboard(data: pd.DataFrame, updated: str):
         symbol = chart_select_col.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
         watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
         watchlist_add_control([symbol], set(data["Symbol"]), f"dashboard:{symbol}")
+        dashboard_range_col, dashboard_overlay_col = st.columns([1.4, 3.6], vertical_alignment="bottom")
+        dashboard_range = dashboard_range_col.radio("Chart range", ["3M", "6M", "1Y", "3Y"], index=2, horizontal=True, key="dashboard-chart-range")
+        dashboard_overlays = dashboard_overlay_col.multiselect("Add moving averages", OVERLAYS, default=[], key="dashboard-chart-overlays", help="Start with price only; add an overlay only when it helps answer a specific question.")
         resolved_symbol = yahoo_symbol(symbol)
         cache_key = f"dashboard_yahoo_chart:{resolved_symbol}:3y:1d:{ADJUSTMENT_CONTRACT}"
         try:
             history, stale = load_with_last_valid(lambda: yahoo_chart_history(resolved_symbol, "3y", "1d", ADJUSTMENT_CONTRACT), st.session_state.get(cache_key))
             st.session_state[cache_key] = history
-            st.markdown(f"<div class='panel-title'>{safe_text(symbol)}</div><div class='panel-subtitle'>3-month Yahoo Finance daily technical view</div>", unsafe_allow_html=True)
-            st.plotly_chart(market_chart(history, resolved_symbol, ["EMA9", "EMA21", "SMA50"], days=66, rsi_lines=[(30, "RSI 30"), (70, "RSI 70")], height=460), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+            st.markdown(f"<div class='panel-title'>{safe_text(symbol)}</div><div class='panel-subtitle'>{dashboard_range} Yahoo Finance daily price view</div>", unsafe_allow_html=True)
+            st.plotly_chart(market_chart(history, resolved_symbol, dashboard_overlays, days=YAHOO_WINDOWS[dashboard_range], rsi_lines=[(30, "RSI 30"), (70, "RSI 70")], height=460, show_volume_sma=bool(dashboard_overlays)), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             if stale:
                 st.caption("Showing the last valid Yahoo Finance chart from this session.")
         except (YahooChartError, ValueError):
