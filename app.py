@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
-
-import httpx
 import pandas as pd
 import streamlit as st
 import altair as alt
+
+from streamlit_data import fetch_constituents, fetch_history, fetch_quotes
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
@@ -60,36 +59,33 @@ def inject_css():
     """, unsafe_allow_html=True)
 
 
-API_BASE_URL = os.getenv("STREAMLIT_API_BASE_URL", "http://localhost:8000")
-
-
 @st.cache_data(ttl=600, show_spinner="Loading official Nifty 200 data from NSE MCP…")
 def live_universe() -> tuple[pd.DataFrame, str]:
-    """Read market data from the API; the UI never calls NSE MCP directly."""
-    response = httpx.get(f"{API_BASE_URL}/v1/market/overview", params={"index": "NIFTY200"}, timeout=30)
-    response.raise_for_status()
-    payload = response.json()
-    frame = pd.DataFrame(payload["constituents"]).rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
+    """Load verified Nifty 200 quotes directly; no API service is required."""
+    rows = fetch_quotes(fetch_constituents())
+    frame = pd.DataFrame(rows).rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
     if frame.empty:
-        raise RuntimeError("The API returned no Nifty 200 rows.")
-    return frame, payload.get("as_of", "unknown")
+        raise RuntimeError("NSE returned no Nifty 200 rows.")
+    return frame, str(frame["date"].iloc[0])
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def sector_snapshot() -> tuple[pd.DataFrame, str | None]:
-    response = httpx.get(f"{API_BASE_URL}/v1/sectors", timeout=15)
-    response.raise_for_status()
-    payload = response.json()
-    return pd.DataFrame(payload.get("sectors", [])), payload.get("as_of")
+def sector_snapshot(data: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    """Compute sector breadth from the cached EOD quote snapshot."""
+    groups = data.groupby("Industry", dropna=False)
+    rows = [{"industry": industry or "Unclassified", "members": len(group), "advancers": int((group["Change %"] > 0).sum()), "decliners": int((group["Change %"] < 0).sum()), "average_change_pct": group["Change %"].mean(), "turnover": float((group["Price"] * group["Volume"]).sum())} for industry, group in groups]
+    return pd.DataFrame(rows).sort_values("average_change_pct", ascending=False), str(data["date"].iloc[0])
 
 
-@st.cache_data(ttl=120, show_spinner="Applying technical screen…")
-def screened_stocks(industry: str | None, min_rsi: float | None, min_volume_ratio: float | None, above_sma50: bool, min_return_1m: float | None, above_sma200: bool, min_return_3m: float | None, min_relative_strength: float | None, near_52w_high: float | None) -> tuple[pd.DataFrame, dict]:
-    params = {"industry": industry, "min_rsi": min_rsi, "min_volume_ratio": min_volume_ratio, "above_sma50": above_sma50, "min_return_1m": min_return_1m, "above_sma200": above_sma200, "min_return_3m": min_return_3m, "min_rel_strength_6m": min_relative_strength, "near_52w_high_pct": near_52w_high, "limit": 200}
-    response = httpx.get(f"{API_BASE_URL}/v1/screener", params={key: value for key, value in params.items() if value is not None}, timeout=15)
-    response.raise_for_status()
-    payload = response.json()
-    return pd.DataFrame(payload.get("matches", [])), payload
+def screened_stocks(data: pd.DataFrame, industry: str | None, min_change: float | None, min_volume: int | None) -> pd.DataFrame:
+    """Fast, full-universe screen on cached EOD fields available in Streamlit."""
+    result = data.copy()
+    if industry:
+        result = result[result["Industry"] == industry]
+    if min_change is not None:
+        result = result[result["Change %"] >= min_change]
+    if min_volume is not None:
+        result = result[result["Volume"] >= min_volume]
+    return result.sort_values("Change %", ascending=False)
 
 
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
@@ -97,13 +93,14 @@ RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
 
 @st.cache_data(ttl=3600, show_spinner="Loading historical NSE bhavcopy data…")
 def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
-    """Read chart bars from the API; backend handles source access and caching."""
-    range_for_months = {1: "1M", 3: "3M", 6: "6M", 12: "1Y", 36: "3Y"}
-    response = httpx.get(f"{API_BASE_URL}/v1/stocks/{symbol}/bars", params={"range": range_for_months[months_needed]}, timeout=45)
-    response.raise_for_status()
-    history = pd.DataFrame(response.json()["bars"]).drop_duplicates(subset="date").sort_values("date")
+    """Read one chart directly from NSE MCP; cache keeps navigation fast."""
+    history = pd.DataFrame(fetch_history(symbol, months_needed)).drop_duplicates(subset="date").sort_values("date")
     if history.empty:
         raise RuntimeError(f"No Bhavcopy history is available for {symbol}.")
+    if "close" not in history and "ltp" in history:
+        history = history.rename(columns={"ltp": "close"})
+    if "volume" not in history and "totalTradedVolume" in history:
+        history = history.rename(columns={"totalTradedVolume": "volume"})
     history["date"] = pd.to_datetime(history["date"])
     return history
 
@@ -133,7 +130,7 @@ def mover_row(row: pd.Series) -> None:
 
 
 def dashboard(data: pd.DataFrame, updated: str):
-    sectors, sectors_as_of = sector_snapshot()
+    sectors, sectors_as_of = sector_snapshot(data)
     if sectors.empty:
         sentiment = "Sector analytics will appear after the initial market-close ingestion completes."
     else:
@@ -168,7 +165,7 @@ def dashboard(data: pd.DataFrame, updated: str):
             for _, row in data.nsmallest(4, "Change %").iterrows():
                 mover_row(row)
 
-    st.markdown(f"<div class='section-title'>Sector pulse</div><p class='section-copy'>Persisted equal-weighted movement across the current Nifty 200 constituent set{f' · as of {sectors_as_of}' if sectors_as_of else ''}.</p>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>Sector pulse</div><p class='section-copy'>Equal-weighted movement across the cached Nifty 200 quote snapshot{f' · as of {sectors_as_of}' if sectors_as_of else ''}.</p>", unsafe_allow_html=True)
     sector_cols = st.columns(4)
     if sectors.empty:
         st.info("Sector aggregates are not available yet. Run the market-close ingestion task to populate them.")
@@ -184,27 +181,19 @@ def dashboard(data: pd.DataFrame, updated: str):
 
 def screener(data: pd.DataFrame):
     st.header("Screener")
-    st.caption("Uses persisted technical snapshots. Coverage grows as historical backfill completes.")
-    x, y, z, w = st.columns(4)
+    st.caption("Fast full-universe EOD screen. Historical technical filters require a persistent worker, so they are intentionally not represented as current data here.")
+    x, y, z = st.columns(3)
     industry = x.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
-    min_rsi = y.number_input("Minimum RSI-14", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
-    min_volume = z.number_input("Minimum volume ratio", min_value=0.0, value=0.0, step=0.1)
-    above_sma50 = w.toggle("Price above SMA-50", value=False)
-    a, b, c, d = st.columns(4)
-    min_return = a.number_input("Minimum 1-month return (%)", value=0.0, step=1.0)
-    min_return_3m = b.number_input("Minimum 3-month return (%)", value=0.0, step=1.0)
-    above_sma200 = c.toggle("Price above SMA-200", value=False)
-    min_relative_strength = d.number_input("Minimum 6-month strength rank", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
-    near_52w_high = st.number_input("Within % of 52-week high", min_value=0.0, max_value=100.0, value=0.0, step=2.5, help="For example, 5 keeps stocks no more than 5% below their 52-week high.")
-    result, metadata = screened_stocks(industry if industry != "All" else None, min_rsi if min_rsi > 0 else None, min_volume if min_volume > 0 else None, above_sma50, min_return if min_return != 0 else None, above_sma200, min_return_3m if min_return_3m != 0 else None, min_relative_strength if min_relative_strength > 0 else None, near_52w_high if near_52w_high > 0 else None)
-    coverage = f"{metadata.get('technical_coverage', 0)} / {metadata.get('universe_count', 200)}"
-    st.caption(f"Technical coverage: {coverage} Nifty 200 stocks · snapshot date: {metadata.get('as_of') or 'not available'}")
+    min_change = y.number_input("Minimum daily change (%)", value=0.0, step=0.25)
+    min_volume = z.number_input("Minimum traded volume", min_value=0, value=0, step=100_000)
+    result = screened_stocks(data, industry if industry != "All" else None, min_change if min_change != 0 else None, min_volume if min_volume > 0 else None)
+    st.caption(f"Coverage: {len(data)} / 200 verified constituents · EOD snapshot date: {data['date'].iloc[0]}")
     if result.empty:
-        st.info("No completed technical snapshots match these filters yet. Historical backfill will expand screen coverage.")
+        st.info("No Nifty 200 stocks match these filters.")
         return
-    shown = result.rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Close", "rsi14": "RSI-14", "sma50": "SMA-50", "sma200": "SMA-200", "volume_ratio_20d": "Volume ratio", "rel_strength_6m": "6M strength rank", "return_1m": "1M return", "return_3m": "3M return", "return_1y": "1Y return", "distance_high_52w": "Distance to 52W high"})
+    shown = result[["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Day High", "Day Low"]]
     st.dataframe(shown, use_container_width=True, hide_index=True)
-    st.caption(f"{len(result)} technical matches")
+    st.caption(f"{len(result)} matches")
 
 
 def charts(data: pd.DataFrame):
@@ -251,7 +240,7 @@ with st.sidebar:
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
-    st.success("Live market API")
-    st.caption("Official Nifty 200 constituents · cached server data")
+    st.success("Direct NSE data")
+    st.caption("Official Nifty 200 constituents · cached in Streamlit")
 
 {"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()

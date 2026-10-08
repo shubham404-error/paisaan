@@ -1,16 +1,15 @@
 # paisaan · CapitalSense Advisors
 
-A standalone CapitalSense Advisors market desk, built around the **paisaan** meme. It includes a calm dark dashboard, screener, high-performance historical charts, watchlist and news screens. The Streamlit UI reads from the project API; only the backend talks to NSE MCP.
+A standalone CapitalSense Advisors market desk, built around the **paisaan** meme. It includes a calm dark dashboard, full-universe EOD screener, historical charts, watchlist and news screens. The deployed application is self-contained: Streamlit reads the official Nifty 200 constituent file and NSE Bhavcopy MCP directly, then caches results in the running app.
 
 ## Run it
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m uvicorn backend.api.main:app --reload --port 8000
 python -m streamlit run app.py
 ```
 
-Run the API in one terminal before launching Streamlit in another. Streamlit reads from `http://localhost:8000` by default; set `STREAMLIT_API_BASE_URL` when deploying it elsewhere.
+This is the deployment command for Streamlit Community Cloud as well. Add any required configuration through Streamlit secrets; the default official NSE endpoints are already configured in code.
 
 For local Postgres/Redis containers:
 
@@ -20,13 +19,15 @@ docker compose up --build
 
 ## NSE MCP data layer
 
-The backend uses the official NSE public Streamable HTTP endpoints:
+The Streamlit data adapter uses the official NSE public Streamable HTTP endpoints:
 
 ```text
 https://mcp.nseindia.in/cmmkt/mcp
 https://mcp.nseindia.in/bhavcopy/cm/mcp
 ```
 
-The backend first loads the official Nifty 200 constituent list from NSE Indices, then quotes every constituent through the Bhavcopy MCP `get_bulk_quote` tool in batches. The Charts screen requests cached history through the API; the backend performs source access and caching.
+The app first loads the official Nifty 200 constituent list from NSE Indices, then quotes every constituent through the Bhavcopy MCP `get_bulk_quote` tool in batches. The Charts screen fetches historical Bhavcopy data only for the selected symbol and caches it, avoiding an expensive full-history reload on each visit.
+
+The Screener is intentionally based on the complete cached EOD quote snapshot (industry, daily move, volume, price range). A Streamlit-only deployment cannot reliably run a persistent 200-stock, three-year backfill or scheduled technical pipeline; advanced historical metrics remain available in the repository's optional backend path for a future infrastructure upgrade.
 
 Exchange data is informational; this project does not provide trading recommendations or order execution.
