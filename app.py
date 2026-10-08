@@ -121,6 +121,24 @@ def inject_css():
       @media (max-width: 760px) { .screener-hero-top { display:block; } .screener-hero-note { margin-top:.8rem; max-width:none; } .guide-steps { grid-template-columns:1fr; } }
       .scan-summary { padding:.7rem .85rem; border:1px solid #26313d; border-radius:12px; background:rgba(16,22,29,.72); color:#b9c3ce; font-size:.82rem; }
       .scan-summary b { color:#f0f4f8; }
+      .watchlist-hero { position:relative; overflow:hidden; padding:1.35rem 1.5rem; margin-bottom:1rem; border:1px solid #2a4842; border-radius:18px; background:linear-gradient(120deg, rgba(14,39,36,.95), rgba(14,21,30,.92)); }
+      .watchlist-hero:after { content:""; position:absolute; width:260px; height:260px; right:-100px; top:-150px; border:1px solid rgba(43,212,164,.18); border-radius:50%; box-shadow:0 0 0 35px rgba(43,212,164,.025), 0 0 0 70px rgba(43,212,164,.02); }
+      .watchlist-hero-inner { position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+      .watchlist-hero h1 { margin:.15rem 0 .3rem; font-size:2rem; letter-spacing:-.055em; }
+      .watchlist-hero-copy { max-width:42rem; }
+      .watchlist-count { display:flex; align-items:baseline; gap:.25rem; min-width:106px; padding:.7rem .85rem; border:1px solid rgba(43,212,164,.25); border-radius:13px; background:rgba(4,15,17,.35); }
+      .watchlist-count b { color:#f4f8fb; font-size:1.55rem; letter-spacing:-.06em; }
+      .watchlist-count span { color:#83a79f; font-size:.78rem; }
+      .watchlist-status { display:flex; align-items:center; flex-wrap:wrap; gap:.45rem .75rem; margin:.15rem 0 1.1rem; padding:.65rem .82rem; border:1px solid #263c3b; border-radius:11px; background:rgba(43,212,164,.045); color:#9daab6; font-size:.78rem; }
+      .watchlist-status b { color:#edf4f3; }
+      .watchlist-status-dot { width:7px; height:7px; border-radius:50%; background:#2bd4a4; box-shadow:0 0 0 4px rgba(43,212,164,.12); }
+      .watchlist-status-badge { padding:.2rem .45rem; border-radius:999px; background:rgba(43,212,164,.12); color:#65e6bd; font-size:.68rem; font-weight:700; }
+      .watchlist-section-head { display:flex; align-items:end; justify-content:space-between; gap:1rem; margin:1.25rem 0 .55rem; }
+      .watchlist-section-head h2 { margin:0; font-size:1.08rem; letter-spacing:-.025em; }
+      .watchlist-section-head p { margin:.16rem 0 0; color:#84919f; font-size:.77rem; }
+      .watchlist-empty { padding:1.15rem 1.2rem; border:1px dashed #315048; border-radius:14px; background:rgba(43,212,164,.035); }
+      .watchlist-empty b { display:block; margin-bottom:.18rem; color:#eaf2f1; font-size:1rem; }
+      @media (max-width: 760px) { .watchlist-hero-inner { display:block; } .watchlist-count { display:inline-flex; margin-top:.85rem; } .watchlist-section-head { display:block; } }
       </style>
     """, unsafe_allow_html=True)
 
@@ -612,42 +630,51 @@ def watchlist_page(data: pd.DataFrame) -> None:
     """Portable, no-login watchlists with opt-in Yahoo overview."""
     valid_symbols = set(data["Symbol"])
     state = watchlist_state(valid_symbols)
-    st.markdown("<section class='chart-hero'><div class='screener-kicker'>Session watchlists · portable by design</div><h1>Keep the names worth revisiting.</h1><div class='small-note'>Create separate lists, export them when you leave, and import them in a later session. Cloud sync is intentionally deferred.</div></section>", unsafe_allow_html=True)
-    list_col, create_col, sync_col = st.columns([1.4, 1, 1])
+    initial_count = len(state["lists"][state["active"]])
+    st.markdown(f"""<section class='watchlist-hero'><div class='watchlist-hero-inner'>
+      <div class='watchlist-hero-copy'><div class='screener-kicker'>Session watchlists · portable by design</div><h1>Your research shelf.</h1><div class='small-note'>Keep the names worth revisiting, compare their progress, and take the list with you when you leave.</div></div>
+      <div class='watchlist-count'><b>{initial_count}</b><span>of 20<br>stocks</span></div>
+    </div></section>""", unsafe_allow_html=True)
+    list_col, create_col, sync_col = st.columns([2.1, 1, 1], vertical_alignment="bottom")
     active = list_col.selectbox("Active watchlist", list(state["lists"]), index=list(state["lists"]).index(state["active"]), key="active-watchlist")
     if active != state["active"]:
         state["active"] = active
         st.session_state["watchlists"] = state
-    with create_col.popover("New watchlist", use_container_width=True):
-        new_name = st.text_input("Name", placeholder="e.g. Banks to study", key="new-watchlist-name")
-        if st.button("Create", key="create-watchlist", use_container_width=True):
-            try:
-                st.session_state["watchlists"] = create_watchlist(state, new_name)
-                st.rerun()
-            except WatchlistError as error:
-                st.warning(str(error))
-    with sync_col.popover("Save / restore", use_container_width=True):
-        st.download_button("Download current watchlists", data=json.dumps(export_watchlists(state), indent=2), file_name="paisaan-watchlists.json", mime="application/json", use_container_width=True)
-        uploaded = st.file_uploader("Upload a prior watchlist", type="json", key="watchlist-upload")
-        if uploaded is not None:
-            try:
-                st.session_state["watchlists"] = normalize_watchlists(json.loads(uploaded.getvalue().decode("utf-8")), valid_symbols)
-                st.success("Watchlists restored for this session.")
-            except (UnicodeDecodeError, json.JSONDecodeError, WatchlistError):
-                st.warning("That file is not a valid paisaan watchlist export.")
-        st.divider()
-        st.button("Google sync (coming later)", disabled=True, use_container_width=True)
-        st.caption("Google sign-in and hosted storage are deferred; download/upload works without a login.")
+    with create_col:
+        st.caption("Manage lists")
+        with st.popover("New list", use_container_width=True):
+            new_name = st.text_input("Name", placeholder="e.g. Banks to study", key="new-watchlist-name")
+            if st.button("Create list", key="create-watchlist", use_container_width=True):
+                try:
+                    st.session_state["watchlists"] = create_watchlist(state, new_name)
+                    st.rerun()
+                except WatchlistError as error:
+                    st.warning(str(error))
+    with sync_col:
+        st.caption("Keep a copy")
+        with st.popover("Save / restore", use_container_width=True):
+            st.download_button("Download watchlists", data=json.dumps(export_watchlists(state), indent=2), file_name="paisaan-watchlists.json", mime="application/json", use_container_width=True)
+            uploaded = st.file_uploader("Upload a prior watchlist", type="json", key="watchlist-upload")
+            if uploaded is not None:
+                try:
+                    st.session_state["watchlists"] = normalize_watchlists(json.loads(uploaded.getvalue().decode("utf-8")), valid_symbols)
+                    st.success("Watchlists restored for this session.")
+                except (UnicodeDecodeError, json.JSONDecodeError, WatchlistError):
+                    st.warning("That file is not a valid paisaan watchlist export.")
+            st.divider()
+            st.button("Google sync (coming later)", disabled=True, use_container_width=True)
+            st.caption("Cloud sync is deferred. Download/upload works without a login.")
 
     state = watchlist_state(valid_symbols)
     symbols = state["lists"][state["active"]]
-    st.caption(f"{len(symbols)} / 20 stocks · session-only until you download or upload a watchlist.")
+    st.markdown(f"<div class='watchlist-status'><span class='watchlist-status-dot'></span><b>{state['active']}</b><span>{len(symbols)} of 20 stocks</span><span class='watchlist-status-badge'>portable JSON</span><span>Saved in this browser session</span></div>", unsafe_allow_html=True)
     if not symbols:
-        st.info("Use the ＋ controls on Dashboard or Screener to add stocks to this watchlist.")
+        st.markdown("<div class='watchlist-empty'><b>This list is ready when you are.</b><span class='small-note'>Use the add-to-watchlist control on Dashboard or Screener to start collecting research candidates.</span></div>", unsafe_allow_html=True)
         return
-    remove_col, _ = st.columns([2, 3])
-    remove_symbols = remove_col.multiselect("Remove stocks", symbols, key="remove-watchlist-symbols")
-    if remove_symbols and remove_col.button("Remove selected", key="remove-watchlist-button"):
+    st.markdown("<div class='watchlist-section-head'><div><h2>Watchlist snapshot</h2><p>One-year price context and available Yahoo Finance fundamentals.</p></div><span class='small-note'>End-of-day data</span></div>", unsafe_allow_html=True)
+    remove_col, remove_action_col, _ = st.columns([2.7, 1, 1.3], vertical_alignment="bottom")
+    remove_symbols = remove_col.multiselect("Tidy this list", symbols, placeholder="Choose stocks to remove", key="remove-watchlist-symbols")
+    if remove_action_col.button("Remove selected", key="remove-watchlist-button", use_container_width=True, disabled=not remove_symbols):
         st.session_state["watchlists"] = remove_from_watchlist(state, state["active"], remove_symbols)
         st.rerun()
     try:
