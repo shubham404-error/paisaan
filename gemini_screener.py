@@ -90,6 +90,26 @@ def ask_stock_comparison(question: str, yahoo_facts: dict, history: list[dict], 
     return response
 
 
+def ask_chart_question(question: str, chart_facts: dict, history: list[dict], api_key: str, model: str = DEFAULT_MODEL) -> str:
+    """Answer a user-led question about one loaded chart without narrating visible raw values."""
+    clean_question = question.strip()
+    if not clean_question or len(clean_question) > _MAX_QUERY_LENGTH:
+        raise GeminiScreenerError("Ask a chart question in 1 to 400 characters.")
+    prompt = (
+        "You are a concise technical-research assistant. Answer the user's question using ONLY this Yahoo Finance chart packet. "
+        "Do not restate raw prices, dates, RSI, volume, or moving-average values that are visible on the chart. Instead interpret "
+        "relationships and give the single most useful check the user should make next. Do not make a trade recommendation, forecast, "
+        "or add generic limitations/disclaimers. Keep the response to two short paragraphs or fewer.\n"
+        f"CHART FACTS:\n{json.dumps(chart_facts, separators=(',', ':'), default=str)}\n"
+        f"RECENT CONVERSATION:\n{json.dumps(history[-6:], separators=(',', ':'))}\n"
+        f"USER QUESTION: {clean_question}"
+    )
+    response = _generate_text(prompt, api_key, model)
+    if len(response) > 900:
+        raise GeminiScreenerError("Gemini returned an overly long chart response.")
+    return response
+
+
 def validate_gemini_screen(payload: object) -> tuple[list[FundamentalRule], str]:
     """Treat Gemini output as untrusted and reduce it to supported local filters."""
     if not isinstance(payload, dict) or not isinstance(payload.get("rules"), list):

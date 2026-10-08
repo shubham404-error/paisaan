@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from gemini_screener import GeminiScreenerError, ask_stock_comparison, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
+from gemini_screener import GeminiScreenerError, ask_chart_question, ask_stock_comparison, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
 
 
 class GeminiScreenerTests(unittest.TestCase):
@@ -57,6 +57,13 @@ class GeminiScreenerTests(unittest.TestCase):
         with patch("gemini_screener._generate_text", return_value="Reliance has the lower supplied P/E; compare it with your quality priority.") as generate:
             answer = ask_stock_comparison("Which has the lower valuation?", facts, [], "test-key")
         self.assertIn("Reliance", answer)
+        self.assertIn("TCS", generate.call_args.args[0])
+
+    def test_chart_chat_uses_only_chart_packet(self):
+        facts = {"source": "Yahoo Finance daily EOD adjusted OHLC", "symbol": "TCS", "latest": {"rsi_14": 52}}
+        with patch("gemini_screener._generate_text", return_value="The moving-average relationship is the next chart condition to inspect.") as generate:
+            answer = ask_chart_question("What should I verify next?", facts, [], "test-key")
+        self.assertIn("chart condition", answer)
         self.assertIn("TCS", generate.call_args.args[0])
 
 

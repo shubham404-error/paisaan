@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -100,6 +100,12 @@ def inject_css():
       [data-testid="stRadio"] label { padding: .15rem .25rem; }
       .chart-heading { font-size:1.55rem; font-weight:700; letter-spacing:-.045em; margin:0 0 .6rem; }
       .chart-meta { color:#8d98a7; font-size:.82rem; margin-top:-.35rem; margin-bottom:.65rem; }
+      .chart-hero { padding:1.1rem 1.25rem .9rem; margin-bottom:.9rem; border:1px solid #293a43; border-radius:16px; background:linear-gradient(115deg, rgba(15,27,34,.94), rgba(12,18,26,.88)); }
+      .chart-hero h1 { margin:.12rem 0 .25rem; font-size:1.65rem; letter-spacing:-.05em; }
+      .chart-guide { display:grid; grid-template-columns:repeat(3, 1fr); gap:.55rem; margin-top:.75rem; }
+      .chart-guide-item { padding:.55rem .65rem; border-left:2px solid #2bd4a4; background:rgba(43,212,164,.045); color:#aab7c4; font-size:.74rem; line-height:1.38; }
+      .chart-guide-item b { display:block; color:#e9eef3; margin-bottom:.12rem; }
+      @media (max-width: 760px) { .chart-guide { grid-template-columns:1fr; } }
       .screener-hero { padding:1.3rem 1.5rem 1.05rem; margin-bottom:1rem; border:1px solid #263b3a; border-radius:18px; background:linear-gradient(115deg, rgba(17,36,35,.92), rgba(14,20,29,.9)); }
       .screener-hero h1 { margin:.15rem 0 .28rem; font-size:2rem; letter-spacing:-.055em; }
       .screener-kicker { color:#2bd4a4; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; }
@@ -384,6 +390,51 @@ def chart_research_cues(history: pd.DataFrame, symbol: str, range_label: str) ->
                 render_research_list("Confirmation checks", cues["confirmation_checks"])
             if cues["limitations"]:
                 render_research_list("Limitations", cues["limitations"])
+
+
+def chart_question_chat(history: pd.DataFrame, symbol: str, range_label: str) -> None:
+    """Optional, user-led chart questions instead of automatic indicator narration."""
+    with st.expander("Ask this chart", expanded=False):
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to ask chart questions.")
+            return
+        fields = ["Date", "Close", "RawClose", "Volume", "VolumeSMA20", "RSI14", "EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "Cross9_21", "Cross20_50", "Cross50_200"]
+        latest = json_records(history.tail(1), fields, limit=1)[0]
+        recent_crosses = json_records(history.loc[history[["Cross9_21", "Cross20_50", "Cross50_200"]].any(axis=1)].tail(5), ["Date", "Cross9_21", "Cross20_50", "Cross50_200"], limit=5)
+        chart_facts = {"source": "Yahoo Finance daily EOD adjusted OHLC", "symbol": symbol, "range": range_label, "latest": latest, "recent_crossover_flags": recent_crosses}
+        chat_key = f"chart-question-chat:v1:{symbol}:{range_label}:{latest.get('Date')}"
+        for message in st.session_state.get(chat_key, []):
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        st.markdown("**Quick questions**")
+        prompt_options = [
+            ("Trend", "What is the current trend structure, and what is the one chart condition I should verify next?"),
+            ("Momentum", "Does the current momentum setup look supported by the available RSI and moving-average relationships?"),
+            ("Key levels", "Which moving-average relationships matter most for this chart setup, and why?"),
+            ("Setup change", "What chart development would materially change the current setup?"),
+        ]
+        prompt_columns = st.columns(2)
+        selected_prompt = None
+        for index, (label, prompt) in enumerate(prompt_options):
+            if prompt_columns[index % 2].button(label, key=f"chart-quick:{chat_key}:{index}", use_container_width=True):
+                selected_prompt = prompt
+        input_label = "Ask a follow-up about this chart" if st.session_state.get(chat_key) else "Ask about this chart"
+        question = selected_prompt or st.chat_input(input_label, key=f"chart-ask:{chat_key}")
+        if question:
+            messages = st.session_state.setdefault(chat_key, [])
+            messages.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Reading the selected chart..."):
+                    try:
+                        answer = ask_chart_question(question, chart_facts, messages[:-1], api_key, gemini_model)
+                    except GeminiScreenerError as error:
+                        st.warning(str(error))
+                        return
+                st.markdown(answer)
+            messages.append({"role": "assistant", "content": answer})
 
 
 def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> None:
@@ -707,7 +758,18 @@ def screener(data: pd.DataFrame):
 
 
 def charts(data: pd.DataFrame):
-    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Daily technical chart · Yahoo Finance adjusted OHLC · end-of-day data, not a live execution feed</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <section class='chart-hero'>
+      <div class='screener-kicker'>Yahoo Finance · daily EOD technical view</div>
+      <h1>Read the setup. Then ask the chart.</h1>
+      <div class='small-note'>Use one symbol at a time; the controls change the evidence on screen, not a recommendation.</div>
+      <div class='chart-guide'>
+        <div class='chart-guide-item'><b>1. Set the window</b>Use the range to judge whether a move is short-term noise or part of a larger structure.</div>
+        <div class='chart-guide-item'><b>2. Keep overlays intentional</b>EMA/SMA show trend context; RSI and volume help test momentum and participation.</div>
+        <div class='chart-guide-item'><b>3. Ask one decision question</b>Open Ask this chart for a focused follow-up, then verify it against the visible chart.</div>
+      </div>
+    </section>
+    """, unsafe_allow_html=True)
     symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
     symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist(), key="chart_symbol")
     range_label = range_col.radio("Range", list(YAHOO_WINDOWS), horizontal=True, index=2)
@@ -736,7 +798,7 @@ def charts(data: pd.DataFrame):
     rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
     figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
     st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-    chart_research_cues(history, symbol, range_label)
+    chart_question_chat(history, symbol, range_label)
     st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
 
