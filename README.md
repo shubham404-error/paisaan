@@ -32,6 +32,8 @@ The Screener is intentionally based on the complete cached EOD quote snapshot (i
 
 The Charts view calculates RSI-14, SMA-20/50/200, and one-month return locally for the selected symbol. Indicators are shown only when the selected cached range contains enough historical bars.
 
+The app has no user accounts or persistent storage in this release, so Watchlists are intentionally not shown. It also protects the NSE upstream with a shared 60-second manual-refresh cooldown.
+
 See [the deployment checklist](DEPLOYMENT.md) before publishing to Streamlit Community Cloud.
 
 Exchange data is informational; this project does not provide trading recommendations or order execution.

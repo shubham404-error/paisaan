@@ -8,6 +8,7 @@ import altair as alt
 
 from streamlit_data import fetch_constituents, fetch_history, fetch_quotes
 from chart_technicals import add_technicals, technical_summary
+from refresh_control import RefreshGate
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
@@ -16,6 +17,12 @@ ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
 
 def safe_text(value: object) -> str:
     return escape(str(value))
+
+
+@st.cache_resource
+def refresh_gate() -> RefreshGate:
+    """Share explicit-refresh protection across users on this app instance."""
+    return RefreshGate(cooldown_seconds=60)
 
 
 def inject_css():
@@ -164,9 +171,12 @@ def dashboard(data: pd.DataFrame, updated: str):
     left, right = st.columns([1.5, 1])
     with left:
         symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
-        history = stock_history(symbol, 3)
-        st.markdown(f"<div class='panel-title'>{symbol}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
-        st.altair_chart(display_chart(history, candle=False), use_container_width=True)
+        try:
+            history = stock_history(symbol, 3)
+            st.markdown(f"<div class='panel-title'>{safe_text(symbol)}</div><div class='panel-subtitle'>3-month Bhavcopy close</div>", unsafe_allow_html=True)
+            st.altair_chart(display_chart(history, candle=False), use_container_width=True)
+        except Exception:
+            st.warning("This chart is temporarily unavailable. The rest of the market snapshot is still current.")
     with right:
         st.markdown("<div class='panel-title'>Today’s moves</div><div class='panel-subtitle'>Nifty 200 leaders & laggards</div>", unsafe_allow_html=True)
         gainers, losers = st.tabs(["Top gainers", "Top losers"])
@@ -215,7 +225,11 @@ def charts(data: pd.DataFrame):
     range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
     st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
-    history = add_technicals(stock_history(symbol, RANGES[range_label]))
+    try:
+        history = add_technicals(stock_history(symbol, RANGES[range_label]))
+    except Exception:
+        st.error("Historical chart data is temporarily unavailable. Try again shortly.")
+        return
     metrics = technical_summary(history)
     metric_columns = st.columns(5)
     metric_columns[0].metric("RSI-14", f"{metrics['rsi14']:.1f}" if metrics["rsi14"] is not None else "—")
@@ -231,16 +245,6 @@ def charts(data: pd.DataFrame):
     st.caption(f"{len(history)} NSE Bhavcopy observations · {history.date.min():%d %b %Y} to {history.date.max():%d %b %Y}")
 
 
-def watchlist(data: pd.DataFrame):
-    st.header("Watchlist")
-    st.write("A quiet place for the names you want to follow in this browser session.")
-    st.caption("This temporary list is not synced across devices and resets when the Streamlit session ends.")
-    if "watchlist_symbols" not in st.session_state:
-        st.session_state.watchlist_symbols = data.Symbol.head(3).tolist()
-    selected = st.multiselect("Your list", data.Symbol.tolist(), key="watchlist_symbols")
-    st.dataframe(data[data.Symbol.isin(selected)], use_container_width=True, hide_index=True)
-
-
 inject_css()
 try:
     data, updated = live_universe()
@@ -252,13 +256,16 @@ except Exception as error:
     st.stop()
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if st.button("Refresh NSE data", use_container_width=True):
-        live_universe.clear()
-        stock_history.clear()
-        st.rerun()
+        allowed, remaining = refresh_gate().request()
+        if allowed:
+            live_universe.clear()
+            stock_history.clear()
+            st.rerun()
+        st.caption(f"Refresh available in {remaining}s.")
     st.success("Direct NSE data")
     st.caption("Official Nifty 200 constituents · cached in Streamlit")
     st.caption("Market data is informational only; it is not investment advice.")
@@ -269,5 +276,3 @@ elif page == "Screener":
     screener(data)
 elif page == "Charts":
     charts(data)
-else:
-    watchlist(data)
