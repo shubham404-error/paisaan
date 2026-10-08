@@ -5,6 +5,7 @@ import json
 import os
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
@@ -187,6 +188,37 @@ def yahoo_comparison_facts(symbols: tuple[str, ...]) -> dict:
             row.update(fundamentals.loc[public_symbol, ["pe", "pb", "roe", "dividend_yield", "market_cap_cr"]].to_dict())
         rows.append(row)
     return {"source": "Yahoo Finance daily EOD data", "stocks": json.loads(pd.DataFrame(rows).to_json(orient="records", date_format="iso"))}
+
+
+@st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading one-year relative returns...")
+def yahoo_relative_returns(symbols: tuple[str, ...]) -> pd.DataFrame:
+    """Normalize selected stocks and Nifty 50 to a common 0% return start date."""
+    close_series: dict[str, pd.Series] = {}
+    for public_symbol in symbols:
+        history = yahoo_chart_history(yahoo_symbol(public_symbol), "1y", "1d", ADJUSTMENT_CONTRACT)
+        close_series[public_symbol] = history.set_index("Date")["Close"]
+    benchmark = yahoo_chart_history("^NSEI", "1y", "1d", ADJUSTMENT_CONTRACT)
+    close_series["Nifty 50"] = benchmark.set_index("Date")["Close"]
+    aligned = pd.concat(close_series, axis=1).sort_index().ffill().dropna()
+    if aligned.empty:
+        raise YahooChartError("Yahoo Finance could not align return history for this comparison.")
+    normalized = aligned.divide(aligned.iloc[0]).subtract(1).multiply(100)
+    normalized.index.name = "Date"
+    return normalized.reset_index()
+
+
+def relative_returns_chart(frame: pd.DataFrame, symbols: tuple[str, ...]) -> go.Figure:
+    """Show candidate return paths against Nifty 50 from the exact same base date."""
+    figure = go.Figure()
+    colors = ["#2bd4a4", "#8ab4ff", "#f0a51a", "#b084f5", "#ff6b6b"]
+    for index, symbol in enumerate(symbols):
+        figure.add_trace(go.Scatter(x=frame["Date"], y=frame[symbol], mode="lines", name=symbol, line={"width": 2, "color": colors[index % len(colors)]}))
+    figure.add_trace(go.Scatter(x=frame["Date"], y=frame["Nifty 50"], mode="lines", name="Nifty 50 benchmark", line={"width": 2.2, "dash": "dot", "color": "#e9eef3"}))
+    figure.add_hline(y=0, line_color="#46515f", line_width=1)
+    figure.update_layout(height=360, margin={"l": 8, "r": 8, "t": 35, "b": 8}, paper_bgcolor="#080a0d", plot_bgcolor="#080a0d", font={"family": "Helvetica, Arial, sans-serif", "color": "#e9eef3"}, legend={"orientation": "h", "y": 1.08, "x": 0, "font": {"size": 10}}, hovermode="x unified")
+    figure.update_yaxes(title_text="Return (%)", gridcolor="#1d232b", zeroline=False)
+    figure.update_xaxes(gridcolor="#1d232b", zeroline=False)
+    return figure
 
 
 def gain(value: float) -> str:
@@ -403,6 +435,14 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
                     st.caption("Showing the last valid Yahoo Finance chart from this session.")
             except (YahooChartError, ValueError):
                 st.warning("This 1-year Yahoo Finance chart is temporarily unavailable.")
+        show_relative_returns = st.toggle("Compare 1Y returns vs Nifty 50", value=False, key=f"show-relative-returns:{chat_key}")
+        if show_relative_returns:
+            try:
+                returns = yahoo_relative_returns(symbols)
+                st.plotly_chart(relative_returns_chart(returns, symbols), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+                st.caption("Normalized total price return from the first common Yahoo Finance daily observation. Nifty 50 is the benchmark.")
+            except (YahooChartError, ValueError):
+                st.warning("The benchmarked return chart is temporarily unavailable.")
         for message in chat["messages"]:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
