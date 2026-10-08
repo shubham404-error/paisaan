@@ -7,6 +7,7 @@ import streamlit as st
 
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
+from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
 from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
@@ -73,6 +74,11 @@ def inject_css():
       [data-testid="stRadio"] label { padding: .15rem .25rem; }
       .chart-heading { font-size:1.55rem; font-weight:700; letter-spacing:-.045em; margin:0 0 .6rem; }
       .chart-meta { color:#8d98a7; font-size:.82rem; margin-top:-.35rem; margin-bottom:.65rem; }
+      .screener-hero { padding:1.35rem 1.5rem; margin-bottom:1rem; border:1px solid #263b3a; border-radius:18px; background:linear-gradient(115deg, rgba(17,36,35,.92), rgba(14,20,29,.9)); }
+      .screener-hero h1 { margin:.15rem 0 .3rem; font-size:2rem; letter-spacing:-.055em; }
+      .screener-kicker { color:#2bd4a4; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; }
+      .scan-summary { padding:.7rem .85rem; border:1px solid #26313d; border-radius:12px; background:rgba(16,22,29,.72); color:#b9c3ce; font-size:.82rem; }
+      .scan-summary b { color:#f0f4f8; }
       </style>
     """, unsafe_allow_html=True)
 
@@ -94,16 +100,42 @@ def sector_snapshot(data: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
     return pd.DataFrame(rows).sort_values("average_change_pct", ascending=False), str(data["date"].iloc[0])
 
 
-def screened_stocks(data: pd.DataFrame, industry: str | None, min_change: float | None, min_volume: int | None) -> pd.DataFrame:
-    """Fast, full-universe screen on cached EOD fields available in Streamlit."""
+def screened_stocks(
+    data: pd.DataFrame,
+    industry: str | None,
+    query: str,
+    min_change: float | None,
+    max_change: float | None,
+    min_volume: int | None,
+    min_price: float | None,
+    max_price: float | None,
+    min_day_range_position: float | None,
+) -> pd.DataFrame:
+    """Filter only verified, cached EOD fields available in this deployment."""
     result = data.copy()
+    day_range = (result["Day High"] - result["Day Low"]).replace(0, pd.NA)
+    result["Day range %"] = (((result["Price"] - result["Day Low"]) / day_range) * 100).fillna(50).clip(0, 100)
+    result["Turnover (Cr)"] = (result["Price"] * result["Volume"]) / 10_000_000
     if industry:
         result = result[result["Industry"] == industry]
+    if query.strip():
+        needle = query.strip()
+        matches = result["Symbol"].str.contains(needle, case=False, regex=False, na=False)
+        matches |= result["Company"].str.contains(needle, case=False, regex=False, na=False)
+        result = result[matches]
     if min_change is not None:
         result = result[result["Change %"] >= min_change]
+    if max_change is not None:
+        result = result[result["Change %"] <= max_change]
     if min_volume is not None:
         result = result[result["Volume"] >= min_volume]
-    return result.sort_values("Change %", ascending=False)
+    if min_price is not None:
+        result = result[result["Price"] >= min_price]
+    if max_price is not None:
+        result = result[result["Price"] <= max_price]
+    if min_day_range_position is not None:
+        result = result[result["Day range %"] >= min_day_range_position]
+    return result
 
 
 YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y": 756}
@@ -113,6 +145,12 @@ YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y
 def yahoo_chart_history(symbol: str, period: str, interval: str, adjustment_contract: str) -> pd.DataFrame:
     """Cached selected-symbol chart history; cache key includes provider contract."""
     return calculate_indicators(download_daily_history(symbol, period, interval, adjustment_contract))
+
+
+@st.cache_data(ttl=6 * 60 * 60, show_spinner="Loading Yahoo Finance fundamentals for the shortlist...")
+def yahoo_fundamentals(symbols: tuple[str, ...]) -> pd.DataFrame:
+    """Cache bounded Yahoo fundamental lookups to keep the screener responsive."""
+    return fetch_yahoo_fundamentals(symbols)
 
 
 def gain(value: float) -> str:
@@ -183,7 +221,7 @@ def dashboard(data: pd.DataFrame, updated: str):
         st.dataframe(shown_sectors, use_container_width=True, hide_index=True, column_config={"average_change_pct": "Average move"})
 
 
-def screener(data: pd.DataFrame):
+def legacy_screener(data: pd.DataFrame):
     st.header("Screener")
     st.caption("No FOMO filters—just a fast, full-universe EOD screen. Historical technical filters need persistent infrastructure, so they are intentionally not represented as current data here.")
     x, y, z = st.columns(3)
@@ -200,10 +238,121 @@ def screener(data: pd.DataFrame):
     st.caption(f"{len(result)} matches")
 
 
+def screener(data: pd.DataFrame):
+    """An EOD scanner with opt-in Yahoo fundamental enrichment."""
+    st.markdown("<section class='screener-hero'><div class='screener-kicker'>Nifty 200 EOD market scanner</div><h1>Find the move. Keep the context.</h1><div class='small-note'>Start with verified NSE data. Add Yahoo fundamentals only when you need a deeper custom screen.</div></section>", unsafe_allow_html=True)
+    preset = st.radio("Quick scan", ["All stocks", "Top gainers", "Most active", "Near day high", "Pullbacks"], horizontal=True)
+    search_col, industry_col, sort_col = st.columns([1.35, 1.15, 1])
+    query = search_col.text_input("Search company or symbol", placeholder="e.g. Reliance, TCS, BANK")
+    industry = industry_col.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
+    sort_label = sort_col.selectbox("Rank results by", ["Daily move", "Traded volume", "Turnover", "Near day high", "Price"])
+    with st.expander("Refine scan", expanded=False):
+        change_min_col, change_max_col, volume_col = st.columns(3)
+        min_change = change_min_col.number_input("Minimum daily move (%)", value=0.0, step=0.25)
+        max_change = change_max_col.number_input("Maximum daily move (%)", value=0.0, step=0.25, help="Set a value only when you want to cap the move.")
+        min_volume = volume_col.number_input("Minimum traded volume", min_value=0, value=0, step=100_000)
+        price_min_col, price_max_col, range_col = st.columns(3)
+        min_price = price_min_col.number_input("Minimum price (Rs)", min_value=0.0, value=0.0, step=50.0)
+        max_price = price_max_col.number_input("Maximum price (Rs)", min_value=0.0, value=0.0, step=50.0)
+        min_day_range_position = range_col.slider("Close in top of day range (%)", 0, 100, 0, help="100 means the close was at the day's high; 50 means mid-range.")
+
+    result = screened_stocks(
+        data,
+        industry if industry != "All" else None,
+        query,
+        min_change if min_change != 0 else None,
+        max_change if max_change != 0 else None,
+        int(min_volume) if min_volume > 0 else None,
+        min_price if min_price > 0 else None,
+        max_price if max_price > 0 else None,
+        float(min_day_range_position) if min_day_range_position > 0 else None,
+    )
+    preset_copy = "Full verified universe"
+    if preset == "Top gainers":
+        result = result[result["Change %"] > 0]
+        preset_copy = "Positive daily movers"
+    elif preset == "Most active":
+        result = result[result["Volume"] >= data["Volume"].quantile(0.75)]
+        preset_copy = "Top quartile by traded volume"
+    elif preset == "Near day high":
+        result = result[result["Day range %"] >= 85]
+        preset_copy = "Closing in the top 15 percent of today’s range"
+    elif preset == "Pullbacks":
+        result = result[result["Change %"] < 0]
+        preset_copy = "Negative daily movers"
+
+    fundamental_query = st.text_input(
+        "Custom fundamental screen (Yahoo Finance)",
+        placeholder="PE under 25 and ROE above 15% and market cap over 50000 crore",
+        help="Supported: PE, P/B, ROE, dividend yield and market cap; use under, below, above, over, at least or at most.",
+    )
+    if fundamental_query.strip():
+        try:
+            rules = parse_fundamental_query(fundamental_query)
+            rule_summary = " and ".join(f"{FIELD_LABELS[rule.field]} {rule.operator} {rule.value:g}" for rule in rules)
+            st.caption(f"Parsed rules: {rule_summary}")
+            fundamental_key = f"fundamentals:{tuple(result['Symbol'].tolist())}"
+            if st.button(f"Run fundamental screen across {len(result)} stocks", type="primary"):
+                st.session_state[fundamental_key] = yahoo_fundamentals(tuple(result["Symbol"].tolist()))
+            fundamentals = st.session_state.get(fundamental_key)
+            if fundamentals is None:
+                st.info("Your Yahoo fundamental query is ready. Run it when you want to enrich this EOD shortlist; results are cached for six hours.")
+                return
+            result = filter_fundamentals(result.merge(fundamentals, on="Symbol", how="left"), rules)
+            preset_copy = f"{preset_copy} plus Yahoo fundamentals"
+        except ValueError as error:
+            st.warning(str(error))
+            return
+        except YahooChartError as error:
+            st.warning(str(error))
+            return
+
+    sort_columns = {"Daily move": "Change %", "Traded volume": "Volume", "Turnover": "Turnover (Cr)", "Near day high": "Day range %", "Price": "Price"}
+    result = result.sort_values(sort_columns[sort_label], ascending=False).reset_index(drop=True)
+    st.markdown(f"<div class='scan-summary'><b>{len(result)} matches</b> · {safe_text(preset_copy)} · {len(data)} / 200 verified constituents · EOD snapshot: {safe_text(data['date'].iloc[0])}</div>", unsafe_allow_html=True)
+    if result.empty:
+        st.info("No stocks match this scan. Loosen a filter or choose All stocks.")
+        return
+    matched_advancers = int((result["Change %"] > 0).sum())
+    metric_a, metric_b, metric_c, metric_d = st.columns(4)
+    metric_a.metric("Matches", len(result), f"of {len(data)} constituents")
+    metric_b.metric("Advancing", matched_advancers, f"{matched_advancers / len(result):.0%} of scan")
+    metric_c.metric("Average move", f"{result['Change %'].mean():+.2f}%")
+    metric_d.metric("Median turnover", f"Rs {result['Turnover (Cr)'].median():,.1f} Cr")
+    shown_columns = ["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Turnover (Cr)", "Day range %"]
+    if fundamental_query.strip():
+        shown_columns += [column for column in ("pe", "pb", "roe", "dividend_yield", "market_cap_cr") if column in result]
+    shown = result[shown_columns].copy()
+    shown.insert(0, "Rank", range(1, len(shown) + 1))
+    column_config = {
+        "Rank": st.column_config.NumberColumn(width="small"),
+        "Price": st.column_config.NumberColumn("Last price", format="Rs %.2f"),
+        "Change %": st.column_config.NumberColumn("Day move", format="%+.2f%%"),
+        "Volume": st.column_config.NumberColumn("Volume", format="%,d"),
+        "Turnover (Cr)": st.column_config.NumberColumn("Turnover", format="Rs %.1f Cr"),
+        "Day range %": st.column_config.ProgressColumn("Close in day range", format="%.0f%%", min_value=0, max_value=100),
+        "pe": st.column_config.NumberColumn("P/E", format="%.1f"),
+        "pb": st.column_config.NumberColumn("P/B", format="%.1f"),
+        "roe": st.column_config.NumberColumn("ROE", format="%.1f%%"),
+        "dividend_yield": st.column_config.NumberColumn("Yield", format="%.1f%%"),
+        "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
+    }
+    st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
+    inspect_col, action_col = st.columns([3, 1], vertical_alignment="bottom")
+    inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
+
+    def open_chart() -> None:
+        st.session_state["page"] = "Charts"
+        st.session_state["chart_symbol"] = inspect_symbol
+
+    action_col.button("Open chart", use_container_width=True, on_click=open_chart)
+    st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
+
+
 def charts(data: pd.DataFrame):
     st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Daily technical chart · Yahoo Finance adjusted OHLC · end-of-day data, not a live execution feed</div>", unsafe_allow_html=True)
     symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
-    symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist())
+    symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist(), key="chart_symbol")
     range_label = range_col.radio("Range", list(YAHOO_WINDOWS), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
     resolved_symbol = yahoo_symbol(symbol)
@@ -244,7 +393,7 @@ except Exception as error:
     st.stop()
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts"], label_visibility="collapsed", key="page")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if st.button("Refresh NSE data", use_container_width=True):
@@ -252,6 +401,7 @@ with st.sidebar:
         if allowed:
             live_universe.clear()
             yahoo_chart_history.clear()
+            yahoo_fundamentals.clear()
             st.rerun()
         st.caption(f"Refresh available in {remaining}s.")
     st.success("Direct NSE data")
