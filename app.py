@@ -29,9 +29,12 @@ def inject_css():
     st.markdown("""
     <style>
       .stApp { background: radial-gradient(54% 35% at 86% -5%, #174c3a 0%, transparent 55%), radial-gradient(36% 25% at 45% 0%, #20244d 0%, transparent 68%), #070a0e; }
-      .block-container { max-width: 1440px; padding-top: .9rem; padding-bottom: 2.5rem; }
+      /* Streamlit's hosted toolbar overlays the top edge on some surfaces.
+         Reserve one shared safe area so every page starts below it. */
+      .block-container { max-width: 1440px; padding-top: 2.35rem; padding-bottom: 2.5rem; }
+      [data-testid="stMainBlockContainer"] { padding-top: 2.35rem !important; }
       [data-testid="stSidebar"] { background: linear-gradient(180deg, #0c1117, #080b10); border-right: 1px solid #222a33; }
-      [data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
+      [data-testid="stSidebar"] .block-container { padding-top: 1.2rem !important; }
       .brand { font-size: 1.4rem; font-weight: 750; letter-spacing: -0.06em; }
       .brand b { color: #2bd4a4; }
       .eyebrow { color: #8d98a7; text-transform: uppercase; font-size: .72rem; letter-spacing: .14em; }
