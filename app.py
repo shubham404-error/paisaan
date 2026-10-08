@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 import json
 import os
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -12,7 +13,7 @@ from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_questi
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
-from watchlist_service import WatchlistError, add_to_watchlist, create_watchlist, default_watchlists, export_watchlists, normalize_watchlists, remove_from_watchlist
+from watchlist_service import WatchlistError, add_to_watchlist, create_watchlist, default_watchlists, encode_shared_watchlist, export_watchlists, import_shared_watchlist, normalize_watchlists, remove_from_watchlist
 from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
@@ -294,6 +295,46 @@ def watchlist_state(valid_symbols: set[str]) -> dict:
         state = default_watchlists()
     st.session_state["watchlists"] = state
     return state
+
+
+def watchlist_share_url(payload: str) -> str:
+    """Return a complete link on hosted Streamlit, with a relative fallback for local runtimes."""
+    base_url = ""
+    try:
+        context_url = str(st.context.url)
+        parsed = urlsplit(context_url)
+        if parsed.scheme and parsed.netloc:
+            base_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except (AttributeError, RuntimeError):
+        pass
+    if not base_url:
+        try:
+            headers = {str(key).lower(): str(value) for key, value in st.context.headers.items()}
+            host = headers.get("x-forwarded-host") or headers.get("host", "")
+            protocol = headers.get("x-forwarded-proto", "https")
+            if host:
+                base_url = f"{protocol}://{host}/"
+        except (AttributeError, RuntimeError):
+            pass
+    query = urlencode({"page": "Watchlists", "watchlist": payload})
+    return f"{base_url}?{query}" if base_url else f"?{query}"
+
+
+def import_shared_watchlist_from_url(valid_symbols: set[str]) -> None:
+    """Consume a shared snapshot once, then clean the URL to avoid duplicate imports."""
+    payload = st.query_params.get("watchlist")
+    if not payload:
+        return
+    try:
+        state = watchlist_state(valid_symbols)
+        imported = import_shared_watchlist(state, payload, valid_symbols)
+        st.session_state["watchlists"] = imported
+        st.session_state["page"] = "Watchlists"
+        st.session_state["watchlist-share-notice"] = f"Added {imported['active']} as your editable local copy."
+    except WatchlistError as error:
+        st.session_state["watchlist-share-error"] = str(error)
+    finally:
+        del st.query_params["watchlist"]
 
 
 def watchlist_add_control(symbols: list[str], valid_symbols: set[str], key: str) -> None:
@@ -635,11 +676,21 @@ def watchlist_page(data: pd.DataFrame) -> None:
       <div class='watchlist-hero-copy'><div class='screener-kicker'>Session watchlists · portable by design</div><h1>Your research shelf.</h1><div class='small-note'>Keep the names worth revisiting, compare their progress, and take the list with you when you leave.</div></div>
       <div class='watchlist-count'><b>{initial_count}</b><span>of 20<br>stocks</span></div>
     </div></section>""", unsafe_allow_html=True)
-    list_col, create_col, sync_col = st.columns([2.1, 1, 1], vertical_alignment="bottom")
+    list_col, share_col, create_col, sync_col = st.columns([2.1, 1.1, 1, 1], vertical_alignment="bottom")
     active = list_col.selectbox("Active watchlist", list(state["lists"]), index=list(state["lists"]).index(state["active"]), key="active-watchlist")
     if active != state["active"]:
         state["active"] = active
         st.session_state["watchlists"] = state
+    with share_col:
+        st.caption("Send a copy")
+        with st.popover("Share active list", use_container_width=True):
+            shared_symbols = state["lists"][state["active"]]
+            if not shared_symbols:
+                st.info("Add at least one stock before sharing this list.")
+            else:
+                share_payload = encode_shared_watchlist(state["active"], shared_symbols)
+                st.code(watchlist_share_url(share_payload), language=None)
+                st.caption("Use the copy icon above. Anyone opening this snapshot receives an editable copy; their edits never change yours.")
     with create_col:
         st.caption("Manage lists")
         with st.popover("New list", use_container_width=True):
@@ -661,12 +712,14 @@ def watchlist_page(data: pd.DataFrame) -> None:
                     st.success("Watchlists restored for this session.")
                 except (UnicodeDecodeError, json.JSONDecodeError, WatchlistError):
                     st.warning("That file is not a valid paisaan watchlist export.")
-            st.divider()
-            st.button("Google sync (coming later)", disabled=True, use_container_width=True)
-            st.caption("Cloud sync is deferred. Download/upload works without a login.")
+            st.caption("Download/upload is a full offline backup. Share active list creates a single-list snapshot link.")
 
     state = watchlist_state(valid_symbols)
     symbols = state["lists"][state["active"]]
+    if notice := st.session_state.pop("watchlist-share-notice", None):
+        st.success(notice)
+    if error := st.session_state.pop("watchlist-share-error", None):
+        st.warning(error)
     st.markdown(f"<div class='watchlist-status'><span class='watchlist-status-dot'></span><b>{state['active']}</b><span>{len(symbols)} of 20 stocks</span><span class='watchlist-status-badge'>portable JSON</span><span>Saved in this browser session</span></div>", unsafe_allow_html=True)
     if not symbols:
         st.markdown("<div class='watchlist-empty'><b>This list is ready when you are.</b><span class='small-note'>Use the add-to-watchlist control on Dashboard or Screener to start collecting research candidates.</span></div>", unsafe_allow_html=True)
@@ -961,6 +1014,7 @@ except Exception as error:
         live_universe.clear()
         st.rerun()
     st.stop()
+import_shared_watchlist_from_url(set(data["Symbol"]))
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlists"], label_visibility="collapsed", key="page")
