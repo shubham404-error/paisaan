@@ -32,7 +32,7 @@ The Screener begins with the complete cached EOD quote snapshot (industry, daily
 
 The Dashboard preview and Charts view use Yahoo Finance daily data for the selected Nifty 200 stock only. They retain raw Close, build adjusted OHLC consistently from Adjusted Close, then render Terminal-compatible EMA/SMA, volume, RSI, and bullish-crossover signals. Provider failures are controlled and retain the last valid chart for the active session.
 
-The app has no user accounts or persistent storage in this release, so Watchlists are intentionally not shown. It also protects the NSE upstream with a shared 60-second manual-refresh cooldown.
+Watchlists are available without an account: users can create named session lists of up to 20 Nifty 200 stocks, download them as JSON, and restore them later by upload. Yahoo Finance supplies an on-demand performance and fundamentals overview. Hosted, Google-backed sync is deliberately deferred. The app also protects the NSE upstream with a shared 60-second manual-refresh cooldown.
 
 See [the deployment checklist](DEPLOYMENT.md) before publishing to Streamlit Community Cloud.
 

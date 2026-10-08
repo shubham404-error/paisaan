@@ -24,5 +24,5 @@
 - Yahoo Finance supplies selected-symbol daily charts. A Yahoo rate limit or provider error leaves the last valid session chart available.
 - Market data is cached in the Streamlit runtime: quotes for 10 minutes, Yahoo charts for four hours, and Yahoo screener fundamentals for six hours.
 - Gemini is an optional text-to-filter interpreter. Its output is validated against the Screener's fixed set of fundamental fields and operators before Yahoo data is requested.
-- Session-only watchlists are deliberately hidden until a persistent, authenticated implementation is available.
+- Watchlists are session-only in this deployment. Users can download and later upload a JSON export; Google-backed hosted sync is deliberately deferred.
 - The full-universe screener uses cached EOD fields. A durable 200-stock historical technical screen needs external persistence and scheduled workers, which are deliberately outside this Streamlit-only deployment.

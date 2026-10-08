@@ -12,6 +12,7 @@ from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_questi
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
+from watchlist_service import WatchlistError, add_to_watchlist, create_watchlist, default_watchlists, export_watchlists, normalize_watchlists, remove_from_watchlist
 from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
@@ -244,6 +245,50 @@ def relative_returns_chart(frame: pd.DataFrame, symbols: tuple[str, ...]) -> go.
     figure.update_yaxes(title_text="Return (%)", gridcolor="#1d232b", zeroline=False)
     figure.update_xaxes(gridcolor="#1d232b", zeroline=False)
     return figure
+
+
+@st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading Yahoo Finance watchlist overview...")
+def yahoo_watchlist_overview(symbols: tuple[str, ...]) -> pd.DataFrame:
+    """Combine Yahoo fundamentals with comparable 1D/1M/3M/1Y EOD returns."""
+    fundamentals = yahoo_fundamentals(symbols).set_index("Symbol")
+    rows: list[dict] = []
+    for public_symbol in symbols:
+        history = yahoo_chart_history(yahoo_symbol(public_symbol), "1y", "1d", ADJUSTMENT_CONTRACT).reset_index(drop=True)
+        latest = history.iloc[-1]
+        close = history["Close"]
+        def trailing_return(days: int) -> float | None:
+            if len(close) <= days:
+                return None
+            return (close.iloc[-1] / close.iloc[-days - 1] - 1) * 100
+        row = {"Symbol": public_symbol, "Close": latest["Close"], "1D %": trailing_return(1), "1M %": trailing_return(22), "3M %": trailing_return(66), "1Y %": trailing_return(252), "RSI-14": latest["RSI14"]}
+        if public_symbol in fundamentals.index:
+            row.update(fundamentals.loc[public_symbol, ["pe", "pb", "roe", "dividend_yield", "market_cap_cr"]].to_dict())
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def watchlist_state(valid_symbols: set[str]) -> dict:
+    """Keep portable watchlists in Streamlit session only until the user exports or imports them."""
+    stored = st.session_state.get("watchlists", default_watchlists())
+    try:
+        state = normalize_watchlists(stored, valid_symbols)
+    except WatchlistError:
+        state = default_watchlists()
+    st.session_state["watchlists"] = state
+    return state
+
+
+def watchlist_add_control(symbols: list[str], valid_symbols: set[str], key: str) -> None:
+    """Small popover used beside tables and dashboard selectors."""
+    state = watchlist_state(valid_symbols)
+    with st.popover("＋", help="Add to a watchlist"):
+        target = st.selectbox("Watchlist", list(state["lists"]), key=f"watch-target:{key}")
+        if st.button(f"Add {len(symbols)} stock(s)", key=f"watch-add:{key}", use_container_width=True):
+            try:
+                st.session_state["watchlists"] = add_to_watchlist(state, target, symbols, valid_symbols)
+                st.success(f"Added to {target}.")
+            except WatchlistError as error:
+                st.warning(str(error))
 
 
 def gain(value: float) -> str:
@@ -563,6 +608,79 @@ def market_tape(data: pd.DataFrame) -> None:
     st.markdown(f"<div class='market-tape'><div class='market-tape-label'>Nifty 200 tape</div><div class='market-tape-viewport'><div class='market-tape-track'><div class='market-tape-group'>{items}</div><div class='market-tape-group' aria-hidden='true'>{items}</div></div></div></div>", unsafe_allow_html=True)
 
 
+def watchlist_page(data: pd.DataFrame) -> None:
+    """Portable, no-login watchlists with opt-in Yahoo overview."""
+    valid_symbols = set(data["Symbol"])
+    state = watchlist_state(valid_symbols)
+    st.markdown("<section class='chart-hero'><div class='screener-kicker'>Session watchlists · portable by design</div><h1>Keep the names worth revisiting.</h1><div class='small-note'>Create separate lists, export them when you leave, and import them in a later session. Cloud sync is intentionally deferred.</div></section>", unsafe_allow_html=True)
+    list_col, create_col, sync_col = st.columns([1.4, 1, 1])
+    active = list_col.selectbox("Active watchlist", list(state["lists"]), index=list(state["lists"]).index(state["active"]), key="active-watchlist")
+    if active != state["active"]:
+        state["active"] = active
+        st.session_state["watchlists"] = state
+    with create_col.popover("New watchlist", use_container_width=True):
+        new_name = st.text_input("Name", placeholder="e.g. Banks to study", key="new-watchlist-name")
+        if st.button("Create", key="create-watchlist", use_container_width=True):
+            try:
+                st.session_state["watchlists"] = create_watchlist(state, new_name)
+                st.rerun()
+            except WatchlistError as error:
+                st.warning(str(error))
+    with sync_col.popover("Save / restore", use_container_width=True):
+        st.download_button("Download current watchlists", data=json.dumps(export_watchlists(state), indent=2), file_name="paisaan-watchlists.json", mime="application/json", use_container_width=True)
+        uploaded = st.file_uploader("Upload a prior watchlist", type="json", key="watchlist-upload")
+        if uploaded is not None:
+            try:
+                st.session_state["watchlists"] = normalize_watchlists(json.loads(uploaded.getvalue().decode("utf-8")), valid_symbols)
+                st.success("Watchlists restored for this session.")
+            except (UnicodeDecodeError, json.JSONDecodeError, WatchlistError):
+                st.warning("That file is not a valid paisaan watchlist export.")
+        st.divider()
+        st.button("Google sync (coming later)", disabled=True, use_container_width=True)
+        st.caption("Google sign-in and hosted storage are deferred; download/upload works without a login.")
+
+    state = watchlist_state(valid_symbols)
+    symbols = state["lists"][state["active"]]
+    st.caption(f"{len(symbols)} / 20 stocks · session-only until you download or upload a watchlist.")
+    if not symbols:
+        st.info("Use the ＋ controls on Dashboard or Screener to add stocks to this watchlist.")
+        return
+    remove_col, _ = st.columns([2, 3])
+    remove_symbols = remove_col.multiselect("Remove stocks", symbols, key="remove-watchlist-symbols")
+    if remove_symbols and remove_col.button("Remove selected", key="remove-watchlist-button"):
+        st.session_state["watchlists"] = remove_from_watchlist(state, state["active"], remove_symbols)
+        st.rerun()
+    try:
+        overview = yahoo_watchlist_overview(tuple(symbols))
+    except (YahooChartError, ValueError):
+        st.warning("Yahoo Finance watchlist data is temporarily unavailable. Try again shortly.")
+        return
+    positive_1m = int((overview["1M %"] > 0).sum())
+    a, b, c, d = st.columns(4)
+    a.metric("Constituents", len(overview), "Yahoo Finance snapshot")
+    b.metric("Positive over 1M", positive_1m, f"{positive_1m / len(overview):.0%} of list")
+    c.metric("Average 3M return", f"{overview['3M %'].mean():+.2f}%")
+    d.metric("Fundamental coverage", f"{overview['pe'].notna().sum()}/{len(overview)}", "P/E available")
+    st.dataframe(overview, use_container_width=True, hide_index=True, column_config={
+        "Close": st.column_config.NumberColumn(format="Rs %.2f"), "1D %": st.column_config.NumberColumn(format="%+.2f%%"), "1M %": st.column_config.NumberColumn(format="%+.2f%%"), "3M %": st.column_config.NumberColumn(format="%+.2f%%"), "1Y %": st.column_config.NumberColumn(format="%+.2f%%"),
+        "RSI-14": st.column_config.NumberColumn(format="%.1f"), "pe": st.column_config.NumberColumn("P/E", format="%.1f"), "pb": st.column_config.NumberColumn("P/B", format="%.1f"), "roe": st.column_config.NumberColumn("ROE", format="%.1f%%"), "dividend_yield": st.column_config.NumberColumn("Yield", format="%.1f%%"), "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
+    })
+    with st.expander("AI watchlist overview", expanded=False):
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to enable the AI overview.")
+        elif st.button("Generate overview", key=f"watchlist-overview:{state['active']}"):
+            facts = {"source": "Yahoo Finance daily EOD and fundamentals", "watchlist": state["active"], "stocks": json_records(overview, list(overview.columns), limit=20)}
+            try:
+                st.session_state[f"watchlist-ai:{state['active']}"] = ask_stock_comparison("Give a concise overview of this watchlist's 1M, 3M and 1Y performance, available fundamentals, and the most useful comparison to make next.", facts, [], api_key, gemini_model)
+            except GeminiScreenerError as error:
+                st.warning(str(error))
+        answer = st.session_state.get(f"watchlist-ai:{state['active']}")
+        if answer:
+            st.markdown(answer)
+    st.caption("Yahoo Finance fields are end-of-day and may be delayed. Watchlists are research aids, not investment advice.")
+
+
 def dashboard(data: pd.DataFrame, updated: str):
     sectors, sectors_as_of = sector_snapshot(data)
     if sectors.empty:
@@ -586,7 +704,10 @@ def dashboard(data: pd.DataFrame, updated: str):
     d.metric("Above previous close", f"{advances}", "live snapshot")
     left, right = st.columns([1.5, 1])
     with left:
-        symbol = st.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
+        chart_select_col, watch_add_col = st.columns([5, 1], vertical_alignment="bottom")
+        symbol = chart_select_col.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
+        watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
+        watchlist_add_control([symbol], set(data["Symbol"]), f"dashboard:{symbol}")
         resolved_symbol = yahoo_symbol(symbol)
         cache_key = f"dashboard_yahoo_chart:{resolved_symbol}:3y:1d:{ADJUSTMENT_CONTRACT}"
         try:
@@ -750,10 +871,12 @@ def screener(data: pd.DataFrame):
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
     research_workbench(result, str(data["date"].iloc[0]), preset_copy, sort_label)
-    inspect_col, action_col = st.columns([3, 1], vertical_alignment="bottom")
+    inspect_col, action_col, watch_add_col = st.columns([3, 1, 1], vertical_alignment="bottom")
     inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
 
     action_col.button("Open chart", use_container_width=True, on_click=open_chart_for, args=(inspect_symbol,))
+    watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
+    watchlist_add_control([inspect_symbol], set(data["Symbol"]), f"screener:{inspect_symbol}")
     st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
 
 
@@ -813,7 +936,7 @@ except Exception as error:
     st.stop()
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts"], label_visibility="collapsed", key="page")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlists"], label_visibility="collapsed", key="page")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if st.button("Refresh NSE data", use_container_width=True):
@@ -834,3 +957,5 @@ elif page == "Screener":
     screener(data)
 elif page == "Charts":
     charts(data)
+elif page == "Watchlists":
+    watchlist_page(data)
