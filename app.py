@@ -105,17 +105,51 @@ def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
     return history
 
 
+def add_technicals(history: pd.DataFrame) -> pd.DataFrame:
+    """Calculate chart-local indicators from the selected symbol's cached bars."""
+    result = history.copy()
+    close = result["close"].astype(float)
+    for window in (20, 50, 200):
+        result[f"sma{window}"] = close.rolling(window).mean()
+    delta = close.diff()
+    average_gain = delta.clip(lower=0).rolling(14).mean()
+    average_loss = (-delta.clip(upper=0)).rolling(14).mean()
+    relative_strength = average_gain / average_loss.replace(0, float("nan"))
+    result["rsi14"] = (100 - (100 / (1 + relative_strength))).mask((average_loss == 0) & (average_gain > 0), 100)
+    return result
+
+
+def technical_summary(history: pd.DataFrame) -> dict[str, float | None]:
+    close = history["close"]
+    latest = history.iloc[-1]
+    def value(column: str) -> float | None:
+        item = latest.get(column)
+        return None if pd.isna(item) else float(item)
+    return {
+        "rsi14": value("rsi14"),
+        "sma20": value("sma20"),
+        "sma50": value("sma50"),
+        "sma200": value("sma200"),
+        "return_1m": ((close.iloc[-1] / close.iloc[-22]) - 1) * 100 if len(close) >= 22 else None,
+    }
+
+
 def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False):
     """Fast Vega-Lite market chart; older history is downsampled before render."""
     view = history.copy()
     if long_range and len(view) > 260:
-        view = view.set_index("date").resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
+        aggregation = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        aggregation.update({column: "last" for column in ("sma20", "sma50", "sma200") if column in view})
+        view = view.set_index("date").resample("W-FRI").agg(aggregation).dropna(subset=["open", "high", "low", "close"]).reset_index()
     base = alt.Chart(view).encode(x=alt.X("date:T", title=None, axis=alt.Axis(grid=False, labelColor=MUTED)), tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("open:Q", title="Open", format=".2f"), alt.Tooltip("high:Q", title="High", format=".2f"), alt.Tooltip("low:Q", title="Low", format=".2f"), alt.Tooltip("close:Q", title="Close", format=".2f")])
     if candle:
         color = alt.condition("datum.open <= datum.close", alt.value(GREEN), alt.value(RED))
         chart = base.mark_rule().encode(y=alt.Y("low:Q", title=None, scale=alt.Scale(zero=False), axis=alt.Axis(gridColor="#202932", labelColor=MUTED)), y2="high:Q", color=color) + base.mark_bar(size=7).encode(y=alt.Y("open:Q", scale=alt.Scale(zero=False)), y2="close:Q", color=color)
     else:
         chart = base.mark_area(line={"color": ACCENT, "strokeWidth": 2.5}, color=alt.Gradient(gradient="linear", stops=[alt.GradientStop(color="rgba(43,212,164,.22)", offset=0), alt.GradientStop(color="rgba(43,212,164,0)", offset=1)], x1=1, x2=1, y1=1, y2=0)).encode(y=alt.Y("close:Q", title=None, axis=alt.Axis(gridColor="#202932", labelColor=MUTED)))
+    for column, color in (("sma20", "#ffd166"), ("sma50", "#8ab4ff"), ("sma200", "#d0a2ff")):
+        if column in view and view[column].notna().any():
+            chart += base.mark_line(color=color, strokeWidth=1.4, opacity=.9).encode(y=alt.Y(f"{column}:Q", title=None))
     return chart.properties(height=315).resolve_scale(y="shared").configure_view(strokeOpacity=0).configure_axis(domain=False, tickColor="#202932")
 
 
@@ -203,7 +237,14 @@ def charts(data: pd.DataFrame):
     range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
     st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
-    history = stock_history(symbol, RANGES[range_label])
+    history = add_technicals(stock_history(symbol, RANGES[range_label]))
+    metrics = technical_summary(history)
+    metric_columns = st.columns(5)
+    metric_columns[0].metric("RSI-14", f"{metrics['rsi14']:.1f}" if metrics["rsi14"] is not None else "—")
+    metric_columns[1].metric("SMA-20", f"₹{metrics['sma20']:,.2f}" if metrics["sma20"] is not None else "—")
+    metric_columns[2].metric("SMA-50", f"₹{metrics['sma50']:,.2f}" if metrics["sma50"] is not None else "—")
+    metric_columns[3].metric("SMA-200", f"₹{metrics['sma200']:,.2f}" if metrics["sma200"] is not None else "—")
+    metric_columns[4].metric("1-month return", f"{metrics['return_1m']:+.2f}%" if metrics["return_1m"] is not None else "—")
     if range_label == "1D":
         history = history.tail(1)
     elif range_label == "1W":
@@ -240,7 +281,12 @@ with st.sidebar:
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
+    if st.button("Refresh NSE data", use_container_width=True):
+        live_universe.clear()
+        stock_history.clear()
+        st.rerun()
     st.success("Direct NSE data")
     st.caption("Official Nifty 200 constituents · cached in Streamlit")
+    st.caption("Market data is informational only; it is not investment advice.")
 
 {"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()

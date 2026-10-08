@@ -30,4 +30,6 @@ The app first loads the official Nifty 200 constituent list from NSE Indices, th
 
 The Screener is intentionally based on the complete cached EOD quote snapshot (industry, daily move, volume, price range). A Streamlit-only deployment cannot reliably run a persistent 200-stock, three-year backfill or scheduled technical pipeline; advanced historical metrics remain available in the repository's optional backend path for a future infrastructure upgrade.
 
+The Charts view calculates RSI-14, SMA-20/50/200, and one-month return locally for the selected symbol. Indicators are shown only when the selected cached range contains enough historical bars.
+
 Exchange data is informational; this project does not provide trading recommendations or order execution.
