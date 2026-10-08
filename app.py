@@ -380,8 +380,10 @@ def chart_research_cues(history: pd.DataFrame, symbol: str, range_label: str) ->
         cues = st.session_state.get(cue_key)
         if cues:
             render_research_list("Observations", cues["observations"])
-            render_research_list("Confirmation checks", cues["confirmation_checks"])
-            render_research_list("Limitations", cues["limitations"])
+            if cues["confirmation_checks"]:
+                render_research_list("Confirmation checks", cues["confirmation_checks"])
+            if cues["limitations"]:
+                render_research_list("Limitations", cues["limitations"])
 
 
 def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> None:

@@ -176,7 +176,11 @@ def validate_chart_cues(payload: object) -> dict:
     required = ("observations", "confirmation_checks", "limitations")
     if not isinstance(payload, dict) or any(not isinstance(payload.get(key), list) for key in required):
         raise GeminiScreenerError("Gemini returned unsupported chart cues.")
-    return {key: _safe_text_list(payload[key]) for key in required}
+    return {
+        "observations": _safe_text_list(payload["observations"]),
+        "confirmation_checks": _optional_text_list(payload["confirmation_checks"]),
+        "limitations": _optional_text_list(payload["limitations"]),
+    }
 
 
 def _safe_text(value: object) -> str:
@@ -187,6 +191,12 @@ def _safe_text(value: object) -> str:
 
 def _safe_text_list(value: object) -> list[str]:
     if not isinstance(value, list) or not 1 <= len(value) <= 5:
+        raise GeminiScreenerError("Gemini returned an unsupported research section.")
+    return [_safe_text(item) for item in value]
+
+
+def _optional_text_list(value: object) -> list[str]:
+    if not isinstance(value, list) or len(value) > 5:
         raise GeminiScreenerError("Gemini returned an unsupported research section.")
     return [_safe_text(item) for item in value]
 
@@ -312,7 +322,7 @@ def _chart_schema() -> dict:
     return {
         "type": "object",
         "properties": {
-            "observations": {"type": "array", "items": {"type": "string"}},
+            "observations": {"type": "array", "minItems": 1, "items": {"type": "string"}},
             "confirmation_checks": {"type": "array", "items": {"type": "string"}},
             "limitations": {"type": "array", "items": {"type": "string"}},
         },

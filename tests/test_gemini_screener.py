@@ -48,6 +48,10 @@ class GeminiScreenerTests(unittest.TestCase):
         with self.assertRaises(GeminiScreenerError):
             validate_chart_cues({"observations": ["Buy this stock."], "confirmation_checks": ["Check volume."], "limitations": ["EOD data only."]})
 
+    def test_chart_cues_allow_empty_optional_sections(self):
+        cues = validate_chart_cues({"observations": ["RSI is supplied in the chart packet."], "confirmation_checks": [], "limitations": []})
+        self.assertEqual(cues["confirmation_checks"], [])
+
     def test_comparison_chat_uses_selected_yahoo_fact_packet(self):
         facts = {"source": "Yahoo Finance daily EOD data", "stocks": [{"symbol": "TCS", "pe": 25}, {"symbol": "RELIANCE", "pe": 20}]}
         with patch("gemini_screener._generate_text", return_value="Reliance has the lower supplied P/E; compare it with your quality priority.") as generate:
