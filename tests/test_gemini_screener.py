@@ -24,13 +24,24 @@ class GeminiScreenerTests(unittest.TestCase):
 
     def test_comparison_requires_every_selected_symbol(self):
         payload = {
-            "commonalities": ["Both appear in the supplied screen."],
-            "differences": ["Their displayed day moves differ."],
+            "decision_lenses": [{"dimension": "valuation", "symbols": ["TCS"], "takeaway": "Only TCS is covered."}],
             "data_gaps": ["No earnings estimate is supplied."],
-            "checks_by_symbol": [{"symbol": "TCS", "checks": ["Open the chart."]}],
+            "research_actions": [{"symbol": "TCS", "focus": "fundamentals", "question": "Review valuation.", "reason": "A comparison needs both symbols."}],
         }
         with self.assertRaises(GeminiScreenerError):
             validate_research_comparison(payload, {"TCS", "RELIANCE"})
+
+    def test_accepts_actionable_comparison_contract(self):
+        payload = {
+            "decision_lenses": [{"dimension": "valuation", "symbols": ["TCS", "RELIANCE"], "takeaway": "Compare the available P/E and P/B fields before treating the screen as a valuation thesis."}],
+            "data_gaps": ["The supplied packet does not contain earnings-growth estimates."],
+            "research_actions": [
+                {"symbol": "TCS", "focus": "chart", "question": "Does the selected chart window show price holding above the displayed moving averages?", "reason": "Use the chart to test whether the current screen result has technical confirmation."},
+                {"symbol": "RELIANCE", "focus": "disclosures", "question": "Which recent company disclosure could explain the screen result?", "reason": "The packet does not include company-specific events."},
+            ],
+        }
+        comparison = validate_research_comparison(payload, {"TCS", "RELIANCE"})
+        self.assertEqual(comparison["research_actions"][0]["focus"], "chart")
 
     def test_rejects_recommendation_like_research_output(self):
         with self.assertRaises(GeminiScreenerError):

@@ -14,6 +14,9 @@ _ALLOWED_OPERATORS = {"<", "<=", ">", ">="}
 _MAX_QUERY_LENGTH = 400
 _MAX_TEXT_LENGTH = 280
 _ADVICE_PATTERN = re.compile(r"\b(buy|sell|hold|accumulate|target price|price target|outperform|underperform|guaranteed)\b", re.IGNORECASE)
+_LOW_VALUE_ACTION_PATTERN = re.compile(r"\bverify (open|high|low|close|previous close|volume|turnover)\b", re.IGNORECASE)
+_COMPARISON_DIMENSIONS = {"price action", "valuation", "quality", "scale"}
+_RESEARCH_FOCUSES = {"chart", "fundamentals", "disclosures"}
 
 
 class GeminiScreenerError(RuntimeError):
@@ -45,9 +48,12 @@ def build_research_shortlist(facts: dict, allowed_symbols: set[str], api_key: st
 def compare_research_stocks(facts: dict, allowed_symbols: set[str], api_key: str, model: str = DEFAULT_MODEL) -> dict:
     """Compare a user-selected set without choosing a winner or making a recommendation."""
     prompt = (
-        "Compare only the user-selected Indian equities in this timestamped facts packet. Describe supplied facts, material "
-        "differences, data gaps, and due-diligence checks by symbol. Do not declare a winner, recommend a trade, forecast, "
-        "or mention facts outside this packet.\nFACTS:\n"
+        "Compare only the user-selected Indian equities in this timestamped facts packet. The UI already shows raw values, so do NOT "
+        "restate prices, daily changes, dates, exchange, series, open/high/low, or raw trading activity. Instead produce 1-3 decision "
+        "lenses that explain what materially separates the names for research, then one concrete next research question per symbol. "
+        "Use chart for technical follow-up, fundamentals for valuation/quality follow-up, or disclosures for company/sector verification. "
+        "Never ask the user to verify a displayed number. Do not declare a winner, recommend a trade, forecast, or mention facts outside "
+        "this packet.\nFACTS:\n"
         f"{json.dumps(facts, separators=(',', ':'), default=str)}"
     )
     return validate_research_comparison(_generate_json(prompt, _comparison_schema(), api_key, model), allowed_symbols)
@@ -111,23 +117,37 @@ def validate_research_shortlist(payload: object, allowed_symbols: set[str]) -> d
 
 
 def validate_research_comparison(payload: object, allowed_symbols: set[str]) -> dict:
-    required = ("commonalities", "differences", "data_gaps", "checks_by_symbol")
+    required = ("decision_lenses", "data_gaps", "research_actions")
     if not isinstance(payload, dict) or any(not isinstance(payload.get(key), list) for key in required):
         raise GeminiScreenerError("Gemini returned an unsupported comparison.")
-    checks: list[dict] = []
+    lenses: list[dict] = []
+    for item in payload["decision_lenses"]:
+        if not isinstance(item, dict) or item.get("dimension") not in _COMPARISON_DIMENSIONS:
+            raise GeminiScreenerError("Gemini returned an unsupported comparison lens.")
+        symbols = item.get("symbols")
+        if not isinstance(symbols, list) or not symbols or not set(symbols).issubset(allowed_symbols):
+            raise GeminiScreenerError("Gemini returned comparison evidence outside your selected stocks.")
+        lenses.append({"dimension": item["dimension"], "symbols": symbols, "takeaway": _safe_text(item.get("takeaway"))})
+    if not 1 <= len(lenses) <= 3:
+        raise GeminiScreenerError("Gemini must return one to three comparison lenses.")
+    actions: list[dict] = []
     seen: set[str] = set()
-    for item in payload["checks_by_symbol"]:
+    for item in payload["research_actions"]:
         if not isinstance(item, dict) or item.get("symbol") not in allowed_symbols or item["symbol"] in seen:
             raise GeminiScreenerError("Gemini returned a comparison outside your selected stocks.")
+        if item.get("focus") not in _RESEARCH_FOCUSES:
+            raise GeminiScreenerError("Gemini returned an unsupported research action.")
         seen.add(item["symbol"])
-        checks.append({"symbol": item["symbol"], "checks": _safe_text_list(item.get("checks"))})
+        question, reason = _safe_text(item.get("question")), _safe_text(item.get("reason"))
+        if _LOW_VALUE_ACTION_PATTERN.search(question) or _LOW_VALUE_ACTION_PATTERN.search(reason):
+            raise GeminiScreenerError("Gemini returned a low-value research action.")
+        actions.append({"symbol": item["symbol"], "focus": item["focus"], "question": question, "reason": reason})
     if seen != allowed_symbols:
         raise GeminiScreenerError("Gemini did not cover every selected stock.")
     return {
-        "commonalities": _safe_text_list(payload["commonalities"]),
-        "differences": _safe_text_list(payload["differences"]),
+        "decision_lenses": lenses,
         "data_gaps": _safe_text_list(payload["data_gaps"]),
-        "checks_by_symbol": checks,
+        "research_actions": actions,
     }
 
 
@@ -228,19 +248,25 @@ def _comparison_schema() -> dict:
     return {
         "type": "object",
         "properties": {
-            "commonalities": {"type": "array", "items": {"type": "string"}},
-            "differences": {"type": "array", "items": {"type": "string"}},
             "data_gaps": {"type": "array", "items": {"type": "string"}},
-            "checks_by_symbol": {
+            "decision_lenses": {
+                "type": "array", "minItems": 1, "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "properties": {"dimension": {"type": "string", "enum": sorted(_COMPARISON_DIMENSIONS)}, "symbols": {"type": "array", "items": {"type": "string"}}, "takeaway": {"type": "string"}},
+                    "required": ["dimension", "symbols", "takeaway"],
+                },
+            },
+            "research_actions": {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {"symbol": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}}},
-                    "required": ["symbol", "checks"],
+                    "properties": {"symbol": {"type": "string"}, "focus": {"type": "string", "enum": sorted(_RESEARCH_FOCUSES)}, "question": {"type": "string"}, "reason": {"type": "string"}},
+                    "required": ["symbol", "focus", "question", "reason"],
                 },
             },
         },
-        "required": ["commonalities", "differences", "data_gaps", "checks_by_symbol"],
+        "required": ["decision_lenses", "data_gaps", "research_actions"],
     }
 
 

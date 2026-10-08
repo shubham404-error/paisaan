@@ -120,7 +120,6 @@ def screened_stocks(
     query: str,
     min_change: float | None,
     max_change: float | None,
-    min_volume: int | None,
     min_price: float | None,
     max_price: float | None,
     min_day_range_position: float | None,
@@ -129,7 +128,6 @@ def screened_stocks(
     result = data.copy()
     day_range = (result["Day High"] - result["Day Low"]).replace(0, pd.NA)
     result["Day range %"] = (((result["Price"] - result["Day Low"]) / day_range) * 100).fillna(50).clip(0, 100)
-    result["Turnover (Cr)"] = (result["Price"] * result["Volume"]) / 10_000_000
     if industry:
         result = result[result["Industry"] == industry]
     if query.strip():
@@ -141,8 +139,6 @@ def screened_stocks(
         result = result[result["Change %"] >= min_change]
     if max_change is not None:
         result = result[result["Change %"] <= max_change]
-    if min_volume is not None:
-        result = result[result["Volume"] >= min_volume]
     if min_price is not None:
         result = result[result["Price"] >= min_price]
     if max_price is not None:
@@ -189,7 +185,7 @@ def render_research_list(title: str, items: list[str]) -> None:
 
 
 def screener_research_packet(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> dict:
-    fields = ["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Turnover (Cr)", "Day range %", "pe", "pb", "roe", "dividend_yield", "market_cap_cr"]
+    fields = ["Symbol", "Company", "Industry", "Price", "Change %", "Day range %", "pe", "pb", "roe", "dividend_yield", "market_cap_cr"]
     return {
         "source": "NSE Bhavcopy EOD; optional Yahoo Finance fundamentals",
         "as_of": as_of,
@@ -198,15 +194,26 @@ def screener_research_packet(result: pd.DataFrame, as_of: str, preset: str, rank
     }
 
 
-def render_comparison(comparison: dict) -> None:
-    render_research_list("What these companies have in common", comparison["commonalities"])
-    render_research_list("Material differences", comparison["differences"])
+def render_comparison(comparison: dict, selected: pd.DataFrame) -> None:
+    overview_columns = [column for column in ("Symbol", "Company", "Industry", "Price", "Change %", "Day range %", "pe", "pb", "roe", "dividend_yield", "market_cap_cr") if column in selected]
+    st.markdown("**At a glance**")
+    st.dataframe(selected[overview_columns], use_container_width=True, hide_index=True, column_config={
+        "Price": st.column_config.NumberColumn("Last price", format="Rs %.2f"),
+        "Change %": st.column_config.NumberColumn("Day move", format="%+.2f%%"),
+        "Day range %": st.column_config.ProgressColumn("Close in day range", format="%.0f%%", min_value=0, max_value=100),
+        "pe": st.column_config.NumberColumn("P/E", format="%.1f"),
+        "pb": st.column_config.NumberColumn("P/B", format="%.1f"),
+        "roe": st.column_config.NumberColumn("ROE", format="%.1f%%"),
+        "dividend_yield": st.column_config.NumberColumn("Yield", format="%.1f%%"),
+        "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
+    })
+    st.markdown("**Decision lenses**")
+    for lens in comparison["decision_lenses"]:
+        st.markdown(f"- **{safe_text(lens['dimension'].title())}** ({', '.join(map(safe_text, lens['symbols']))}): {safe_text(lens['takeaway'])}")
     render_research_list("Data gaps to resolve", comparison["data_gaps"])
-    st.markdown("**Due-diligence checks**")
-    for item in comparison["checks_by_symbol"]:
-        st.markdown(f"_{safe_text(item['symbol'])}_")
-        for check in item["checks"]:
-            st.markdown(f"- {safe_text(check)}")
+    st.markdown("**Next research steps**")
+    for item in comparison["research_actions"]:
+        st.markdown(f"- **{safe_text(item['symbol'])} · {safe_text(item['focus'].title())}:** {safe_text(item['question'])} — {safe_text(item['reason'])}")
 
 
 def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: str) -> None:
@@ -246,7 +253,7 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
                             st.warning(str(error))
                     comparison = st.session_state.get(f"research-comparison:{context_id}:shortlist")
                     if comparison:
-                        render_comparison(comparison)
+                        render_comparison(comparison, result[result["Symbol"].isin(checked_symbols)])
                 elif shortlist:
                     st.caption("Check at least two candidates to compare them.")
         with compare_tab:
@@ -263,7 +270,7 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
                         st.warning(str(error))
                 comparison = st.session_state.get(comparison_key)
                 if comparison:
-                    render_comparison(comparison)
+                    render_comparison(comparison, result[result["Symbol"].isin(selected_symbols)])
 
 
 def chart_research_cues(history: pd.DataFrame, symbol: str, range_label: str) -> None:
@@ -361,35 +368,22 @@ def dashboard(data: pd.DataFrame, updated: str):
 
 
 def legacy_screener(data: pd.DataFrame):
-    st.header("Screener")
     st.caption("No FOMO filters—just a fast, full-universe EOD screen. Historical technical filters need persistent infrastructure, so they are intentionally not represented as current data here.")
-    x, y, z = st.columns(3)
-    industry = x.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
-    min_change = y.number_input("Minimum daily change (%)", value=0.0, step=0.25)
-    min_volume = z.number_input("Minimum traded volume", min_value=0, value=0, step=100_000)
-    result = screened_stocks(data, industry if industry != "All" else None, min_change if min_change != 0 else None, min_volume if min_volume > 0 else None)
     st.caption(f"Coverage: {len(data)} / 200 verified constituents · EOD snapshot date: {data['date'].iloc[0]}")
-    if result.empty:
-        st.info("No Nifty 200 stocks match these filters.")
-        return
-    shown = result[["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Day High", "Day Low"]]
-    st.dataframe(shown, use_container_width=True, hide_index=True)
-    st.caption(f"{len(result)} matches")
 
 
 def screener(data: pd.DataFrame):
     """An EOD scanner with opt-in Yahoo fundamental enrichment."""
     st.markdown("<section class='screener-hero'><div class='screener-kicker'>Nifty 200 EOD market scanner</div><h1>Find the move. Keep the context.</h1><div class='small-note'>Start with verified NSE data. Add Yahoo fundamentals only when you need a deeper custom screen.</div></section>", unsafe_allow_html=True)
-    preset = st.radio("Quick scan", ["All stocks", "Top gainers", "Most active", "Near day high", "Pullbacks"], horizontal=True)
+    preset = st.radio("Quick scan", ["All stocks", "Top gainers", "Near day high", "Pullbacks"], horizontal=True)
     search_col, industry_col, sort_col = st.columns([1.35, 1.15, 1])
     query = search_col.text_input("Search company or symbol", placeholder="e.g. Reliance, TCS, BANK")
     industry = industry_col.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
-    sort_label = sort_col.selectbox("Rank results by", ["Daily move", "Traded volume", "Turnover", "Near day high", "Price"])
+    sort_label = sort_col.selectbox("Rank results by", ["Daily move", "Near day high", "Price"])
     with st.expander("Refine scan", expanded=False):
-        change_min_col, change_max_col, volume_col = st.columns(3)
+        change_min_col, change_max_col = st.columns(2)
         min_change = change_min_col.number_input("Minimum daily move (%)", value=0.0, step=0.25)
         max_change = change_max_col.number_input("Maximum daily move (%)", value=0.0, step=0.25, help="Set a value only when you want to cap the move.")
-        min_volume = volume_col.number_input("Minimum traded volume", min_value=0, value=0, step=100_000)
         price_min_col, price_max_col, range_col = st.columns(3)
         min_price = price_min_col.number_input("Minimum price (Rs)", min_value=0.0, value=0.0, step=50.0)
         max_price = price_max_col.number_input("Maximum price (Rs)", min_value=0.0, value=0.0, step=50.0)
@@ -401,7 +395,6 @@ def screener(data: pd.DataFrame):
         query,
         min_change if min_change != 0 else None,
         max_change if max_change != 0 else None,
-        int(min_volume) if min_volume > 0 else None,
         min_price if min_price > 0 else None,
         max_price if max_price > 0 else None,
         float(min_day_range_position) if min_day_range_position > 0 else None,
@@ -410,9 +403,6 @@ def screener(data: pd.DataFrame):
     if preset == "Top gainers":
         result = result[result["Change %"] > 0]
         preset_copy = "Positive daily movers"
-    elif preset == "Most active":
-        result = result[result["Volume"] >= data["Volume"].quantile(0.75)]
-        preset_copy = "Top quartile by traded volume"
     elif preset == "Near day high":
         result = result[result["Day range %"] >= 85]
         preset_copy = "Closing in the top 15 percent of today’s range"
@@ -459,7 +449,7 @@ def screener(data: pd.DataFrame):
             st.warning(str(error))
             return
 
-    sort_columns = {"Daily move": "Change %", "Traded volume": "Volume", "Turnover": "Turnover (Cr)", "Near day high": "Day range %", "Price": "Price"}
+    sort_columns = {"Daily move": "Change %", "Near day high": "Day range %", "Price": "Price"}
     result = result.sort_values(sort_columns[sort_label], ascending=False).reset_index(drop=True)
     st.markdown(f"<div class='scan-summary'><b>{len(result)} matches</b> · {safe_text(preset_copy)} · {len(data)} / 200 verified constituents · EOD snapshot: {safe_text(data['date'].iloc[0])}</div>", unsafe_allow_html=True)
     if result.empty:
@@ -470,8 +460,8 @@ def screener(data: pd.DataFrame):
     metric_a.metric("Matches", len(result), f"of {len(data)} constituents")
     metric_b.metric("Advancing", matched_advancers, f"{matched_advancers / len(result):.0%} of scan")
     metric_c.metric("Average move", f"{result['Change %'].mean():+.2f}%")
-    metric_d.metric("Median turnover", f"Rs {result['Turnover (Cr)'].median():,.1f} Cr")
-    shown_columns = ["Symbol", "Company", "Industry", "Price", "Change %", "Volume", "Turnover (Cr)", "Day range %"]
+    metric_d.metric("Industries", result["Industry"].nunique(), "represented in scan")
+    shown_columns = ["Symbol", "Company", "Industry", "Price", "Change %", "Day range %"]
     if fundamental_query.strip():
         shown_columns += [column for column in ("pe", "pb", "roe", "dividend_yield", "market_cap_cr") if column in result]
     shown = result[shown_columns].copy()
@@ -480,8 +470,6 @@ def screener(data: pd.DataFrame):
         "Rank": st.column_config.NumberColumn(width="small"),
         "Price": st.column_config.NumberColumn("Last price", format="Rs %.2f"),
         "Change %": st.column_config.NumberColumn("Day move", format="%+.2f%%"),
-        "Volume": st.column_config.NumberColumn("Volume", format="%,d"),
-        "Turnover (Cr)": st.column_config.NumberColumn("Turnover", format="Rs %.1f Cr"),
         "Day range %": st.column_config.ProgressColumn("Close in day range", format="%.0f%%", min_value=0, max_value=100),
         "pe": st.column_config.NumberColumn("P/E", format="%.1f"),
         "pb": st.column_config.NumberColumn("P/B", format="%.1f"),
