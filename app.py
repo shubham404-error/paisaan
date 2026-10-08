@@ -384,6 +384,25 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
                 "SMA-200": st.column_config.NumberColumn(format="Rs %.2f"),
             },
         )
+        chart_toggle_col, chart_symbol_col = st.columns([1, 2], vertical_alignment="bottom")
+        show_chart = chart_toggle_col.toggle("Show 1Y chart", value=True, key=f"show-comparison-chart:{chat_key}")
+        chart_symbol = chart_symbol_col.selectbox("Chart symbol", symbols, key=f"comparison-chart-symbol:{chat_key}")
+        if show_chart:
+            try:
+                chart_history, chart_stale = load_with_last_valid(
+                    lambda: yahoo_chart_history(yahoo_symbol(chart_symbol), "1y", "1d", ADJUSTMENT_CONTRACT),
+                    st.session_state.get(f"comparison-chart-history:{chart_key if False else chat_key}:{chart_symbol}"),
+                )
+                st.session_state[f"comparison-chart-history:{chat_key}:{chart_symbol}"] = chart_history
+                st.plotly_chart(
+                    market_chart(chart_history, yahoo_symbol(chart_symbol), ["EMA9", "EMA21", "SMA50", "SMA200"], days=YAHOO_WINDOWS["1Y"], height=520),
+                    use_container_width=True,
+                    config={"displaylogo": False, "scrollZoom": True},
+                )
+                if chart_stale:
+                    st.caption("Showing the last valid Yahoo Finance chart from this session.")
+            except (YahooChartError, ValueError):
+                st.warning("This 1-year Yahoo Finance chart is temporarily unavailable.")
         for message in chat["messages"]:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
@@ -399,7 +418,8 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
         for index, (label, prompt) in enumerate(quick_prompts):
             if prompt_columns[index % 2].button(label, key=f"quick-prompt:{chat_key}:{index}", use_container_width=True):
                 selected_prompt = prompt
-        question = selected_prompt or st.chat_input("Ask about these selected stocks", key=f"ask-{chat_key}")
+        input_label = "Ask a follow-up about these stocks" if chat["messages"] else "Ask about these selected stocks"
+        question = selected_prompt or st.chat_input(input_label, key=f"ask-{chat_key}")
         if question:
             chat["messages"].append({"role": "user", "content": question})
             with st.chat_message("user"):
