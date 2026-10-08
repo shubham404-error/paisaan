@@ -30,7 +30,7 @@ The app first loads the official Nifty 200 constituent list from NSE Indices, th
 
 The Screener is intentionally based on the complete cached EOD quote snapshot (industry, daily move, volume, price range). A Streamlit-only deployment cannot reliably run a persistent 200-stock, three-year backfill or scheduled technical pipeline; advanced historical metrics remain available in the repository's optional backend path for a future infrastructure upgrade.
 
-The Charts view calculates RSI-14, SMA-20/50/200, and one-month return locally for the selected symbol. Indicators are shown only when the selected cached range contains enough historical bars.
+The Charts view uses Yahoo Finance daily data for the selected Nifty 200 stock only. It retains raw Close, builds adjusted OHLC consistently from Adjusted Close, then renders Terminal-compatible EMA/SMA, volume, RSI, and bullish-crossover signals. Provider failures are controlled and retain the last valid chart for the active session.
 
 The app has no user accounts or persistent storage in this release, so Watchlists are intentionally not shown. It also protects the NSE upstream with a shared 60-second manual-refresh cooldown.
 

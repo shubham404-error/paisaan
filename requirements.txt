@@ -1,6 +1,8 @@
 streamlit>=1.39
 pandas>=2.2
 altair>=5.4
+yfinance>=0.2
+plotly>=5.20
 mcp>=1.9
 fastapi>=0.115
 uvicorn[standard]>=0.30

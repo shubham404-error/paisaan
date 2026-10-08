@@ -7,8 +7,8 @@ import streamlit as st
 import altair as alt
 
 from streamlit_data import fetch_constituents, fetch_history, fetch_quotes
-from chart_technicals import add_technicals, technical_summary
 from refresh_control import RefreshGate
+from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
@@ -108,6 +108,7 @@ def screened_stocks(data: pd.DataFrame, industry: str | None, min_change: float 
 
 
 RANGES = {"1D": 1, "1W": 1, "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
+YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y": 756}
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading historical NSE bhavcopy data…")
@@ -122,6 +123,12 @@ def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
         history = history.rename(columns={"totalTradedVolume": "volume"})
     history["date"] = pd.to_datetime(history["date"])
     return history
+
+
+@st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading daily Yahoo Finance chart data…")
+def yahoo_chart_history(symbol: str, period: str, interval: str, adjustment_contract: str) -> pd.DataFrame:
+    """Cached selected-symbol chart history; cache key includes provider contract."""
+    return calculate_indicators(download_daily_history(symbol, period, interval, adjustment_contract))
 
 
 def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False):
@@ -224,30 +231,36 @@ def screener(data: pd.DataFrame):
 
 
 def charts(data: pd.DataFrame):
-    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Meme energy, terminal discipline · live NSE snapshot with historical Bhavcopy data</div>", unsafe_allow_html=True)
+    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Daily technical chart · Yahoo Finance adjusted OHLC · end-of-day data, not a live execution feed</div>", unsafe_allow_html=True)
     symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
     symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist())
     range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
     row = data.set_index("Symbol").loc[symbol]
-    st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{symbol} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
+    resolved_symbol = yahoo_symbol(symbol)
+    st.markdown(f"<div class='chart-heading' style='font-size:1.42rem;margin-top:.25rem'>{safe_text(symbol)} &nbsp; ₹{row.Price:,.2f} &nbsp; {gain(row['Change %'])}</div>", unsafe_allow_html=True)
+    overlays, levels = st.columns([2, 1])
+    selected_overlays = overlays.multiselect("Price overlays", OVERLAYS, default=["EMA9", "EMA21", "SMA50", "SMA200"])
+    selected_levels = levels.multiselect("RSI levels", [30, 35, 50, 70], default=[30, 70])
+    cache_key = f"last_yahoo_chart:{resolved_symbol}:3y:1d:{ADJUSTMENT_CONTRACT}"
     try:
-        history = add_technicals(stock_history(symbol, RANGES[range_label]))
-    except Exception:
-        st.error("Historical chart data is temporarily unavailable. Try again shortly.")
+        history, stale = load_with_last_valid(lambda: yahoo_chart_history(resolved_symbol, "3y", "1d", ADJUSTMENT_CONTRACT), st.session_state.get(cache_key))
+        st.session_state[cache_key] = history
+    except (YahooChartError, ValueError):
+        st.error("Daily chart data is temporarily unavailable. Try again shortly.")
         return
-    metrics = technical_summary(history)
+    if stale:
+        st.warning("Yahoo Finance could not refresh this chart. Showing the last valid chart from this session.")
+    latest = history.iloc[-1]
     metric_columns = st.columns(5)
-    metric_columns[0].metric("RSI-14", f"{metrics['rsi14']:.1f}" if metrics["rsi14"] is not None else "—")
-    metric_columns[1].metric("SMA-20", f"₹{metrics['sma20']:,.2f}" if metrics["sma20"] is not None else "—")
-    metric_columns[2].metric("SMA-50", f"₹{metrics['sma50']:,.2f}" if metrics["sma50"] is not None else "—")
-    metric_columns[3].metric("SMA-200", f"₹{metrics['sma200']:,.2f}" if metrics["sma200"] is not None else "—")
-    metric_columns[4].metric("1-month return", f"{metrics['return_1m']:+.2f}%" if metrics["return_1m"] is not None else "—")
-    if range_label == "1D":
-        history = history.tail(1)
-    elif range_label == "1W":
-        history = history.tail(5)
-    st.altair_chart(display_chart(history, candle=range_label in {"1D", "1W", "1M"}, long_range=range_label in {"1Y", "3Y"}), use_container_width=True)
-    st.caption(f"{len(history)} NSE Bhavcopy observations · {history.date.min():%d %b %Y} to {history.date.max():%d %b %Y}")
+    metric_columns[0].metric("RSI-14", f"{latest['RSI14']:.1f}" if pd.notna(latest["RSI14"]) else "—")
+    metric_columns[1].metric("EMA-9", f"₹{latest['EMA9']:,.2f}" if pd.notna(latest["EMA9"]) else "—")
+    metric_columns[2].metric("SMA-50", f"₹{latest['SMA50']:,.2f}" if pd.notna(latest["SMA50"]) else "—")
+    metric_columns[3].metric("SMA-200", f"₹{latest['SMA200']:,.2f}" if pd.notna(latest["SMA200"]) else "—")
+    metric_columns[4].metric("Latest close", f"₹{latest['Close']:,.2f}")
+    rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
+    figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
+    st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+    st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
 
 inject_css()
@@ -269,6 +282,7 @@ with st.sidebar:
         if allowed:
             live_universe.clear()
             stock_history.clear()
+            yahoo_chart_history.clear()
             st.rerun()
         st.caption(f"Refresh available in {remaining}s.")
     st.success("Direct NSE data")
