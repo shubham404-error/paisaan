@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
+import time
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -29,11 +30,23 @@ def fetch_nifty_200_quotes(constituents: list[dict]) -> list[dict]:
     return [{**item, **by_symbol[item["symbol"]]} for item in constituents if item["symbol"] in by_symbol]
 
 
+def _history_chunk(symbol: str, months: int, end_date: str, attempts: int = 4) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return call_nse_tool("get_stock_history", {"symbol": symbol.upper(), "months": months, "endDate": end_date}, BHAVCOPY_URL)
+        except Exception as error:
+            last_error = error
+            if attempt < attempts - 1:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(f"NSE history request failed for {symbol} ending {end_date} after {attempts} attempts") from last_error
+
+
 def fetch_history(symbol: str, months: int) -> list[dict]:
     rows, end_date, remaining = [], "today", months
     while remaining > 0:
         chunk = min(3, remaining)
-        response = call_nse_tool("get_stock_history", {"symbol": symbol.upper(), "months": chunk, "endDate": end_date}, BHAVCOPY_URL)
+        response = _history_chunk(symbol, chunk, end_date)
         rows.extend(response.get("data", []))
         end_date = response.get("next_end_date")
         if not end_date:

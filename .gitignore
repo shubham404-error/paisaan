@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .env
 paisaan.db
+logs/
 
 # Local Streamlit secrets must never be committed
 .streamlit/secrets.toml

@@ -18,3 +18,9 @@ For production, set `DATABASE_URL` to PostgreSQL/TimescaleDB and `REDIS_URL` to 
 ## First data load
 
 Run `ingest_nifty_200_market_close` first to persist the official membership and latest EOD bars. Then invoke `enqueue_initial_backfill.delay(36)` once; it creates one 36-month history task per active constituent. Technical snapshots are calculated after each backfill and refreshed after every subsequent EOD ingestion.
+
+When Redis/Celery is not available locally, use the resumable development runner instead:
+
+```powershell
+python -m backend.worker.local_backfill --months 36 --pause-seconds 2
+```
