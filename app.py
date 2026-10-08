@@ -5,6 +5,7 @@ import streamlit as st
 import altair as alt
 
 from streamlit_data import fetch_constituents, fetch_history, fetch_quotes
+from chart_technicals import add_technicals, technical_summary
 
 st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹", layout="wide")
 
@@ -103,35 +104,6 @@ def stock_history(symbol: str, months_needed: int) -> pd.DataFrame:
         history = history.rename(columns={"totalTradedVolume": "volume"})
     history["date"] = pd.to_datetime(history["date"])
     return history
-
-
-def add_technicals(history: pd.DataFrame) -> pd.DataFrame:
-    """Calculate chart-local indicators from the selected symbol's cached bars."""
-    result = history.copy()
-    close = result["close"].astype(float)
-    for window in (20, 50, 200):
-        result[f"sma{window}"] = close.rolling(window).mean()
-    delta = close.diff()
-    average_gain = delta.clip(lower=0).rolling(14).mean()
-    average_loss = (-delta.clip(upper=0)).rolling(14).mean()
-    relative_strength = average_gain / average_loss.replace(0, float("nan"))
-    result["rsi14"] = (100 - (100 / (1 + relative_strength))).mask((average_loss == 0) & (average_gain > 0), 100)
-    return result
-
-
-def technical_summary(history: pd.DataFrame) -> dict[str, float | None]:
-    close = history["close"]
-    latest = history.iloc[-1]
-    def value(column: str) -> float | None:
-        item = latest.get(column)
-        return None if pd.isna(item) else float(item)
-    return {
-        "rsi14": value("rsi14"),
-        "sma20": value("sma20"),
-        "sma50": value("sma50"),
-        "sma200": value("sma200"),
-        "return_1m": ((close.iloc[-1] / close.iloc[-22]) - 1) * 100 if len(close) >= 22 else None,
-    }
 
 
 def display_chart(history: pd.DataFrame, candle: bool, long_range: bool = False):
@@ -255,19 +227,12 @@ def charts(data: pd.DataFrame):
 
 def watchlist(data: pd.DataFrame):
     st.header("Watchlist")
-    st.write("A quiet place for the names you want to follow.")
-    selected = st.multiselect("Your list", data.Symbol.tolist(), default=data.Symbol.head(3).tolist())
+    st.write("A quiet place for the names you want to follow in this browser session.")
+    st.caption("This temporary list is not synced across devices and resets when the Streamlit session ends.")
+    if "watchlist_symbols" not in st.session_state:
+        st.session_state.watchlist_symbols = data.Symbol.head(3).tolist()
+    selected = st.multiselect("Your list", data.Symbol.tolist(), key="watchlist_symbols")
     st.dataframe(data[data.Symbol.isin(selected)], use_container_width=True, hide_index=True)
-
-
-def news():
-    st.header("News")
-    for title, source, time in [
-        ("Market breadth improves as large caps lead the session", "Market desk", "Today"),
-        ("Earnings calendar: what to watch this week", "Company filings", "Today"),
-        ("Sector snapshot: financials and energy", "Market desk", "Yesterday"),
-    ]:
-        st.markdown(f"<div class='feed'><b>{title}</b><br><span class='small-note'>{source} · {time}</span></div>", unsafe_allow_html=True)
 
 
 inject_css()
@@ -275,10 +240,13 @@ try:
     data, updated = live_universe()
 except Exception as error:
     st.error(f"NSE data could not be loaded: {error}")
+    if st.button("Try NSE data again"):
+        live_universe.clear()
+        st.rerun()
     st.stop()
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist", "News"], label_visibility="collapsed")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlist"], label_visibility="collapsed")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if st.button("Refresh NSE data", use_container_width=True):
@@ -289,4 +257,4 @@ with st.sidebar:
     st.caption("Official Nifty 200 constituents · cached in Streamlit")
     st.caption("Market data is informational only; it is not investment advice.")
 
-{"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist, "News": news}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data) if page != "News" else news()
+{"Dashboard": dashboard, "Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data, updated) if page == "Dashboard" else {"Screener": screener, "Charts": charts, "Watchlist": watchlist}[page](data)
