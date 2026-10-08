@@ -61,6 +61,8 @@ def inject_css():
       .sector-chip { display:inline-flex; align-items:center; gap:.45rem; padding:.45rem .62rem; margin:0 .35rem .35rem 0; border:1px solid #25313a; background:#10171e; border-radius:10px; font-size:.78rem; }
       .sector-dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
       .sentiment { border-left:3px solid #2bd4a4; background:rgba(43,212,164,.06); border-radius:0 12px 12px 0; padding:.75rem .9rem; margin:1rem 0 .2rem; color:#c8d1da; font-size:.9rem; }
+      .meme-note { display:inline-flex; align-items:center; gap:.45rem; margin-top:1rem; padding:.42rem .65rem; border:1px solid rgba(43,212,164,.28); border-radius:999px; background:rgba(43,212,164,.07); color:#c8d1da; font-size:.76rem; }
+      .meme-note b { color:#2bd4a4; letter-spacing:.02em; }
       .small-note { color: #8d98a7; font-size: .78rem; }
       .stButton button { border-radius: 999px; border-color: #315448; font-weight:600; }
       .stDataFrame { border:1px solid #242d37; border-radius:14px; overflow:hidden; }
@@ -156,10 +158,10 @@ def dashboard(data: pd.DataFrame, updated: str):
         leader, laggard = sectors.iloc[0], sectors.iloc[-1]
         sentiment = f"{safe_text(leader.industry)} leads the Nifty 200 universe ({leader.average_change_pct:+.2f}% equal-weight); {safe_text(laggard.industry)} trails ({laggard.average_change_pct:+.2f}%)."
     st.markdown(f"""<div class='topbar'>
-      <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · market desk</span></div>
-      <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated}</div>
+      <div><span class='brand'>pai<b>saan</b></span><span class='small-note' style='margin-left:.7rem'>CapitalSense Advisors · pehchaan-first market desk</span></div>
+      <div class='market-pill'><span class='live-dot'></span>Nifty 200 constituents · NSE Bhavcopy · {updated} · no FOMO</div>
     </div>""", unsafe_allow_html=True)
-    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p><div class='sentiment'>{sentiment}</div></section>", unsafe_allow_html=True)
+    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · equity desk</div><h1>more sense.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>A focused read on the official Nifty 200 constituent universe—built for clearer market decisions.</p><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· facts follow.</span></div></section>", unsafe_allow_html=True)
     st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
@@ -187,7 +189,7 @@ def dashboard(data: pd.DataFrame, updated: str):
             for _, row in data.nsmallest(4, "Change %").iterrows():
                 mover_row(row)
 
-    st.markdown(f"<div class='section-title'>Sector pulse</div><p class='section-copy'>Equal-weighted movement across the cached Nifty 200 quote snapshot{f' · as of {sectors_as_of}' if sectors_as_of else ''}.</p>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>Sector pulse <span class='small-note'>/ vibe check</span></div><p class='section-copy'>Equal-weighted movement across the cached Nifty 200 quote snapshot{f' · as of {sectors_as_of}' if sectors_as_of else ''}.</p>", unsafe_allow_html=True)
     sector_cols = st.columns(4)
     if sectors.empty:
         st.info("Sector aggregates are not available yet. Run the market-close ingestion task to populate them.")
@@ -203,7 +205,7 @@ def dashboard(data: pd.DataFrame, updated: str):
 
 def screener(data: pd.DataFrame):
     st.header("Screener")
-    st.caption("Fast full-universe EOD screen. Historical technical filters require a persistent worker, so they are intentionally not represented as current data here.")
+    st.caption("No FOMO filters—just a fast, full-universe EOD screen. Historical technical filters need persistent infrastructure, so they are intentionally not represented as current data here.")
     x, y, z = st.columns(3)
     industry = x.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
     min_change = y.number_input("Minimum daily change (%)", value=0.0, step=0.25)
@@ -219,7 +221,7 @@ def screener(data: pd.DataFrame):
 
 
 def charts(data: pd.DataFrame):
-    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Live NSE price snapshot with historical Bhavcopy data</div>", unsafe_allow_html=True)
+    st.markdown("<div class='chart-heading'>Charts</div><div class='chart-meta'>Meme energy, terminal discipline · live NSE snapshot with historical Bhavcopy data</div>", unsafe_allow_html=True)
     symbol_col, range_col = st.columns([1.25, 3.75], vertical_alignment="bottom")
     symbol = symbol_col.selectbox("Symbol", data.Symbol.tolist())
     range_label = range_col.radio("Range", list(RANGES), horizontal=True, index=2)
@@ -267,7 +269,7 @@ with st.sidebar:
             st.rerun()
         st.caption(f"Refresh available in {remaining}s.")
     st.success("Direct NSE data")
-    st.caption("Official Nifty 200 constituents · cached in Streamlit")
+    st.caption("Official Nifty 200 constituents · cached in Streamlit · no jaldibaazi")
     st.caption("Market data is informational only; it is not investment advice.")
 
 if page == "Dashboard":
