@@ -65,6 +65,10 @@ def trendlyne_widget_status(widget: str, symbol: str) -> tuple[bool, str]:
             return False, "Trendlyne did not return enough widget content."
         return True, ""
     except HTTPError as error:
+        if error.code == 405:
+            # Trendlyne rejects server-side probe requests for some widgets, while
+            # the browser iframe remains the supported delivery mechanism.
+            return True, ""
         return False, f"Trendlyne responded with HTTP {error.code}."
     except URLError:
         return False, "Trendlyne could not be reached from this app."
