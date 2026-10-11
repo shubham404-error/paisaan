@@ -133,6 +133,11 @@ def inject_css():
       .sentiment { border-left:3px solid #2bd4a4; background:rgba(43,212,164,.06); border-radius:0 12px 12px 0; padding:.75rem .9rem; margin:1rem 0 .2rem; color:#c8d1da; font-size:.9rem; }
       .meme-note { display:inline-flex; align-items:center; gap:.45rem; margin-top:1rem; padding:.42rem .65rem; border:1px solid rgba(43,212,164,.28); border-radius:999px; background:rgba(43,212,164,.07); color:#c8d1da; font-size:.76rem; }
       .meme-note b { color:#2bd4a4; letter-spacing:.02em; }
+      .load-cta-copy { padding:.25rem .1rem; }
+      .load-cta-copy b { display:block; color:#edf4f3; font-size:.92rem; margin-bottom:.16rem; }
+      .load-cta-copy span { color:#8d98a7; font-size:.77rem; line-height:1.38; }
+      .load-cta-note { display:flex; align-items:center; gap:.5rem; height:100%; padding:.65rem .75rem; border-left:2px solid #2bd4a4; border-radius:0 10px 10px 0; background:rgba(43,212,164,.055); color:#aab7c4; font-size:.76rem; line-height:1.35; }
+      @media (max-width: 760px) { .load-cta-copy { padding-top:.15rem; } .load-cta-note { min-height:auto; margin-top:.25rem; } }
       .header-chips { display:flex; flex-wrap:wrap; gap:.45rem; margin-top:.9rem; }
       .header-chip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .58rem; border:1px solid rgba(121,150,159,.26); border-radius:999px; background:rgba(5,12,16,.23); color:#b8c6cf; font-size:.72rem; }
       .header-chip b { color:#edf4f3; font-weight:650; }
@@ -1255,8 +1260,7 @@ with st.sidebar:
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if snapshot is None:
-        load_requested = st.button("Load NSE snapshot", type="primary", use_container_width=True)
-        st.caption("Load official Nifty 200 constituents and the latest NSE EOD quotes when you are ready.")
+        st.caption("Snapshot not loaded yet. Start it from the market desk on the right.")
     elif st.button("Refresh NSE data", use_container_width=True):
         allowed, remaining = refresh_gate().request()
         if allowed:
@@ -1281,7 +1285,11 @@ if snapshot is None:
       <div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· tap in when you are ready.</span></div>
     </section>
     """, unsafe_allow_html=True)
-    load_requested = st.button("Load the Nifty 200 snapshot", type="primary") or load_requested
+    with st.container(border=True):
+        action_col, copy_col, note_col = st.columns([1.2, 2.25, 1.45], vertical_alignment="center")
+        load_requested = action_col.button("Start market scan", type="primary", use_container_width=True) or load_requested
+        copy_col.markdown("<div class='load-cta-copy'><b>Load the verified Nifty 200 snapshot</b><span>Official constituents and the latest NSE EOD quotes, loaded only when you choose.</span></div>", unsafe_allow_html=True)
+        note_col.markdown("<div class='load-cta-note'>Takes a moment. You will see real loading progress—not a fake market tantrum.</div>", unsafe_allow_html=True)
 
 if load_requested:
     try:
