@@ -15,6 +15,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request_with_universe
+from market_mood import MarketMoodError, fetch_tickertape_mmi, mmi_zone
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -174,6 +175,16 @@ def inject_css():
       @keyframes market-tape-scroll { from { transform:translateX(0); } to { transform:translateX(-50%); } }
       @media (prefers-reduced-motion: reduce) { .market-tape-track { animation:none; } }
       .source-note { color:#73808f; font-size:.72rem; margin:.5rem 0 1.1rem; }
+      .mmi-card { display:flex; align-items:center; justify-content:space-between; gap:1.25rem; margin:1rem 0 1.2rem; padding:1rem 1.15rem; border:1px solid #2a3d3d; border-radius:16px; background:linear-gradient(115deg, rgba(14,30,31,.94), rgba(13,18,26,.9)); }
+      .mmi-kicker { color:#8d98a7; font-size:.68rem; font-weight:750; letter-spacing:.14em; text-transform:uppercase; }
+      .mmi-copy b { display:block; margin:.16rem 0 .18rem; color:#eff6f5; font-size:1.1rem; letter-spacing:-.025em; }
+      .mmi-copy span { color:#8d98a7; font-size:.74rem; }
+      .mmi-meter { flex:1; max-width:470px; min-width:190px; }
+      .mmi-track { position:relative; height:10px; border-radius:999px; background:linear-gradient(90deg, #34d391 0 30%, #9adab5 30% 50%, #e9ae55 50% 70%, #ff7373 70% 100%); box-shadow:inset 0 0 0 1px rgba(255,255,255,.08); }
+      .mmi-marker { position:absolute; top:50%; left:var(--mmi-value); width:18px; height:18px; transform:translate(-50%,-50%); border:3px solid #0b1015; border-radius:50%; background:#f7fbfb; box-shadow:0 0 0 2px var(--mmi-color), 0 3px 9px rgba(0,0,0,.4); }
+      .mmi-labels { display:flex; justify-content:space-between; margin-top:.38rem; color:#718090; font-size:.64rem; letter-spacing:.04em; text-transform:uppercase; }
+      .mmi-score { min-width:86px; text-align:right; } .mmi-score b { display:block; color:var(--mmi-color); font-size:2rem; line-height:1; letter-spacing:-.06em; } .mmi-score span { color:#9aa8b6; font-size:.72rem; }
+      @media (max-width: 700px) { .mmi-card { display:grid; grid-template-columns:1fr auto; } .mmi-meter { grid-column:1 / -1; max-width:none; } }
       .hero { position:relative; overflow:hidden; padding: 2.3rem 20rem 2.3rem 2.5rem; border: 1px solid #29423e; border-radius: 22px;
               background: linear-gradient(120deg, rgba(17,31,35,.96), rgba(12,18,26,.82)); box-shadow: 0 18px 50px rgba(0,0,0,.16); }
       .hero h1 { font-size: clamp(2.2rem, 4vw, 4.25rem); letter-spacing: -.065em; line-height: .95; margin: .5rem 0; }
@@ -362,6 +373,12 @@ SHORT_RANGE_OVERLAYS = {
 def yahoo_chart_history(symbol: str, period: str, interval: str, adjustment_contract: str) -> pd.DataFrame:
     """Cached selected-symbol chart history; cache key includes provider contract."""
     return calculate_indicators(download_daily_history(symbol, period, interval, adjustment_contract))
+
+
+@st.cache_data(ttl=60 * 60, show_spinner=False)
+def market_mood_snapshot() -> dict[str, object]:
+    """Keep the public sentiment number separate from the official Nifty 200 data."""
+    return fetch_tickertape_mmi()
 
 
 @st.cache_data(ttl=6 * 60 * 60, show_spinner="Loading Yahoo Finance fundamentals for the shortlist...")
@@ -1122,6 +1139,24 @@ def watchlist_page(data: pd.DataFrame) -> None:
     st.caption("Yahoo Finance fields are end-of-day and may be delayed. Watchlists are research aids, not investment advice.")
 
 
+def market_mood_card() -> None:
+    """Show Tickertape's public MMI number in paisaan's own compact dashboard UI."""
+    try:
+        snapshot = market_mood_snapshot()
+        value = float(snapshot["value"])
+        zone, color = mmi_zone(value)
+        st.markdown(
+            f"""<section class='mmi-card' style='--mmi-value:{value:.1f}%;--mmi-color:{color}'>
+  <div class='mmi-copy'><div class='mmi-kicker'>Market mood index</div><b>{safe_text(zone)}</b><span>India-wide sentiment context · not a buy or sell call</span></div>
+  <div class='mmi-meter' role='img' aria-label='Market Mood Index {value:.1f} out of 100, {safe_text(zone)}'><div class='mmi-track'><i class='mmi-marker'></i></div><div class='mmi-labels'><span>Extreme fear</span><span>Fear</span><span>Greed</span><span>Extreme greed</span></div></div>
+  <div class='mmi-score'><b>{value:.1f}</b><span>Tickertape · {safe_text(snapshot['as_of'])}</span></div>
+</section>""",
+            unsafe_allow_html=True,
+        )
+    except MarketMoodError:
+        st.markdown("<section class='mmi-card'><div class='mmi-copy'><div class='mmi-kicker'>Market mood index</div><b>Temporarily unavailable</b><span>Tickertape's public sentiment snapshot could not be loaded. Nifty 200 research remains available.</span></div></section>", unsafe_allow_html=True)
+
+
 def dashboard(data: pd.DataFrame, updated: str):
     sectors, sectors_as_of = sector_snapshot(data)
     if sectors.empty:
@@ -1145,6 +1180,7 @@ def dashboard(data: pd.DataFrame, updated: str):
     b.metric("Advance / decline", f"{advances} / {declines}", f"{advances / len(data):.0%} advancing")
     c.metric("Average daily move", f"{data['Change %'].mean():+.2f}%", "across universe")
     d.metric("Above previous close", f"{advances}", "live snapshot")
+    market_mood_card()
     left, right = st.columns([1.5, 1])
     with left:
         chart_select_col, watch_add_col = st.columns([5, 1], vertical_alignment="bottom")
