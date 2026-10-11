@@ -1185,8 +1185,9 @@ def dashboard(data: pd.DataFrame, updated: str):
     with left:
         chart_select_col, watch_add_col = st.columns([5, 1], vertical_alignment="bottom")
         symbol = chart_select_col.selectbox("Chart symbol", data.Symbol.tolist(), index=0, label_visibility="collapsed")
-        watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
-        watchlist_add_control([symbol], set(data["Symbol"]), f"dashboard:{symbol}")
+        with watch_add_col:
+            st.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
+            watchlist_add_control([symbol], set(data["Symbol"]), f"dashboard:{symbol}")
         dashboard_range_col, dashboard_overlay_col = st.columns([1.4, 3.6], vertical_alignment="bottom")
         dashboard_range = dashboard_range_col.radio("Chart range", ["3M", "6M", "1Y", "3Y"], index=2, horizontal=True, key="dashboard-chart-range")
         dashboard_overlays = dashboard_overlay_col.multiselect("Add moving averages", OVERLAYS, default=[], key="dashboard-chart-overlays", help="Start with price only; add an overlay only when it helps answer a specific question.")
