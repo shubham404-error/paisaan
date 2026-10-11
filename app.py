@@ -5,7 +5,6 @@ from html import escape
 import json
 import os
 from pathlib import Path
-import re
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
@@ -13,10 +12,11 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request, translate_screener_request_with_universe
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request_with_universe
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
+from universe_taxonomy import deterministic_scope, taxonomy_records
 from watchlist_service import WatchlistError, add_to_watchlist, create_watchlist, default_watchlists, encode_shared_watchlist, export_watchlists, import_shared_watchlist, normalize_watchlists, remove_from_watchlist
 from yahoo_chart_service import ADJUSTMENT_CONTRACT, OVERLAYS, YahooChartError, calculate_indicators, download_daily_history, load_with_last_valid, market_chart, yahoo_symbol
 
@@ -284,17 +284,6 @@ def screened_stocks(
 
 
 YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y": 756}
-PRIVATE_BANK_SYMBOLS = (
-    "HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK", "FEDERALBNK",
-    "IDFCFIRSTB", "INDUSINDBK", "RBLBANK", "YESBANK", "BANDHANBNK",
-)
-
-
-def explicit_company_scope(query: str, available_symbols: set[str]) -> tuple[list[str], str | None]:
-    """Resolve the few high-intent company groups with a transparent local taxonomy."""
-    if re.search(r"\bprivate\s+banks?\b", query, flags=re.IGNORECASE):
-        return [symbol for symbol in PRIVATE_BANK_SYMBOLS if symbol in available_symbols], "Nifty 200 private banks"
-    return [], None
 
 
 @st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading daily Yahoo Finance chart data…")
@@ -1167,31 +1156,45 @@ def screener(data: pd.DataFrame):
                 interpretation_key = f"gemini-rules:{fundamental_query.strip()}"
                 if interpretation_key not in st.session_state:
                     with st.spinner("Gemini is translating your screen..."):
-                        universe_context = result[["Symbol", "Company", "Industry"]].to_dict(orient="records")
+                        universe_context = taxonomy_records(result[["Symbol", "Company", "Industry"]].to_dict(orient="records"))
                         st.session_state[interpretation_key] = translate_screener_request_with_universe(fundamental_query, universe_context, api_key, gemini_model)
                 interpretation = st.session_state[interpretation_key]
-                rules, summary, model_scope_symbols = interpretation
-                local_scope_symbols, local_scope_label = explicit_company_scope(fundamental_query, set(result["Symbol"]))
+                if len(interpretation) == 3:  # Session data created before the screen-plan contract was extended.
+                    rules, summary, model_scope_symbols = interpretation
+                    unresolved_requirements = []
+                else:
+                    rules, summary, model_scope_symbols, unresolved_requirements = interpretation
+                universe_context = taxonomy_records(result[["Symbol", "Company", "Industry"]].to_dict(orient="records"))
+                local_scope_symbols, local_scope_label = deterministic_scope(fundamental_query, universe_context)
                 ai_scope_symbols = local_scope_symbols or model_scope_symbols
                 st.caption(f"Gemini interpretation: {safe_text(summary)}")
+                if unresolved_requirements:
+                    st.caption(f"Not evaluated with the current data: {', '.join(safe_text(item) for item in unresolved_requirements)}")
                 if ai_scope_symbols:
                     result = result[result["Symbol"].isin(ai_scope_symbols)]
-                    scope_label = local_scope_label or "Gemini company scope"
+                    scope_label = f"Verified {local_scope_label} scope" if local_scope_label else "Gemini company scope"
                     st.caption(f"{scope_label}: {', '.join(ai_scope_symbols)}")
             else:
                 st.caption("Gemini is not configured, so this request is being interpreted with the available rule parser.")
                 rules = parse_fundamental_query(fundamental_query)
-            rule_summary = " and ".join(f"{FIELD_LABELS[rule.field]} {rule.operator} {rule.value:g}" for rule in rules)
-            st.caption(f"Applied rules: {rule_summary}")
-            fundamental_key = f"fundamentals:{tuple(result['Symbol'].tolist())}"
-            if st.button(f"Run fundamental screen across {len(result)} stocks", type="primary"):
-                st.session_state[fundamental_key] = yahoo_fundamentals(tuple(result["Symbol"].tolist()))
-            fundamentals = st.session_state.get(fundamental_key)
-            if fundamentals is None:
-                st.info("Your request is ready. Run the screen to enrich this EOD shortlist with Yahoo Finance fundamentals.")
-                return
-            result = filter_fundamentals(result.merge(fundamentals, on="Symbol", how="left"), rules)
-            preset_copy = f"{preset_copy} plus Yahoo fundamentals"
+            if not rules:
+                if not ai_scope_symbols:
+                    st.info("This request has no supported numeric condition or verified company scope yet. Add a metric such as P/E, P/B, ROE, yield, or market cap.")
+                    return
+                st.caption("Applied rules: verified company scope only")
+                preset_copy = f"{preset_copy} plus verified company scope"
+            else:
+                rule_summary = " and ".join(f"{FIELD_LABELS[rule.field]} {rule.operator} {rule.value:g}" for rule in rules)
+                st.caption(f"Applied rules: {rule_summary}")
+                fundamental_key = f"fundamentals:{tuple(result['Symbol'].tolist())}"
+                if st.button(f"Run fundamental screen across {len(result)} stocks", type="primary"):
+                    st.session_state[fundamental_key] = yahoo_fundamentals(tuple(result["Symbol"].tolist()))
+                fundamentals = st.session_state.get(fundamental_key)
+                if fundamentals is None:
+                    st.info("Your request is ready. Run the screen to enrich this EOD shortlist with Yahoo Finance fundamentals.")
+                    return
+                result = filter_fundamentals(result.merge(fundamentals, on="Symbol", how="left"), rules)
+                preset_copy = f"{preset_copy} plus Yahoo fundamentals"
         except (ValueError, GeminiScreenerError, YahooChartError) as error:
             st.warning(str(error))
             return

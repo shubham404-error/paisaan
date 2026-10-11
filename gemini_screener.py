@@ -36,7 +36,7 @@ def translate_screener_request(query: str, api_key: str, model: str = DEFAULT_MO
 
 def translate_screener_request_with_universe(
     query: str, universe: list[dict[str, str]], api_key: str, model: str = DEFAULT_MODEL
-) -> tuple[list[FundamentalRule], str, list[str]]:
+) -> tuple[list[FundamentalRule], str, list[str], list[str]]:
     """Translate a screen and optionally constrain it to named Nifty 200 constituents.
 
     The model may only return symbols that are in the compact company/industry packet.
@@ -52,9 +52,12 @@ def translate_screener_request_with_universe(
         raise GeminiScreenerError("The Nifty 200 universe is unavailable for this screen.")
     prompt = (
         _prompt(request_text)
-        + " Use the supplied Nifty 200 universe to resolve any explicit sector, sub-sector, business-type, or company-group intent "
-        "in the user's words (for example, private banks). Return every matching exact symbol from this universe in symbols. "
-        "If the user did not express such an intent, return symbols as an empty list. Never invent a symbol and never make a recommendation.\n"
+        + " You are compiling a deterministic screen plan, not picking stocks. Use the supplied Nifty 200 universe, including each "
+        "company's verified local tags, to resolve any explicit sector, sub-sector, business-type, or company-group intent. "
+        "When the request contains a group, symbols must contain EVERY matching exact symbol from this universe—not examples, the largest names, "
+        "or a shortlist. If the request does not contain an explicit group, return symbols as an empty list. Put every requested condition that cannot "
+        "be evaluated from the allowed numeric fields into unresolved_requirements instead of silently dropping it. Never invent a symbol, infer a missing "
+        "metric, make a recommendation, or convert a preference into a numerical rule without a number.\n"
         f"NIFTY 200 UNIVERSE:\n{json.dumps(universe, separators=(',', ':'))}"
     )
     result = _generate_json(prompt, _context_response_schema(), api_key, model)
@@ -68,7 +71,10 @@ def translate_screener_request_with_universe(
         if symbol not in allowed_symbols or symbol in symbols:
             raise GeminiScreenerError("Gemini returned a company outside the Nifty 200 universe.")
         symbols.append(symbol)
-    return rules, summary, symbols
+    unresolved = result.get("unresolved_requirements", [])
+    if not isinstance(unresolved, list) or len(unresolved) > 5 or any(not isinstance(item, str) or not item.strip() or len(item) > 120 for item in unresolved):
+        raise GeminiScreenerError("Gemini returned an unsupported screen requirement.")
+    return rules, summary, symbols, [item.strip() for item in unresolved]
 
 
 def build_research_shortlist(facts: dict, allowed_symbols: set[str], api_key: str, model: str = DEFAULT_MODEL) -> dict:
@@ -165,8 +171,8 @@ def validate_gemini_screen(payload: object) -> tuple[list[FundamentalRule], str]
         if not 0 <= numeric_value <= 10_000_000:
             raise GeminiScreenerError("Gemini returned a value outside this screener's safe range.")
         rules.append(FundamentalRule(field, operator, numeric_value))
-    if not rules or len(rules) > 5:
-        raise GeminiScreenerError("Ask for one to five supported fundamental conditions.")
+    if len(rules) > 5:
+        raise GeminiScreenerError("Ask for no more than five supported fundamental conditions.")
     summary = payload.get("summary")
     if not isinstance(summary, str):
         summary = "AI interpreted your request into supported fundamental rules."
@@ -318,7 +324,7 @@ def _response_schema() -> dict:
                     },
                     "required": ["field", "operator", "value"],
                 },
-                "minItems": 1,
+                "minItems": 0,
                 "maxItems": 5,
             },
             "summary": {"type": "string"},
@@ -330,7 +336,8 @@ def _response_schema() -> dict:
 def _context_response_schema() -> dict:
     schema = _response_schema()
     schema["properties"]["symbols"] = {"type": "array", "items": {"type": "string"}, "maxItems": 200}
-    schema["required"] = ["rules", "summary", "symbols"]
+    schema["properties"]["unresolved_requirements"] = {"type": "array", "items": {"type": "string"}, "maxItems": 5}
+    schema["required"] = ["rules", "summary", "symbols", "unresolved_requirements"]
     return schema
 
 

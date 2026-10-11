@@ -10,6 +10,11 @@ class GeminiScreenerTests(unittest.TestCase):
         self.assertEqual([(rule.field, rule.operator, rule.value) for rule in rules], [("pe", "<", 25.0), ("roe", ">=", 15.0)])
         self.assertEqual(summary, "Value and quality screen.")
 
+    def test_accepts_scope_only_plan(self):
+        rules, summary = validate_gemini_screen({"rules": [], "summary": "Private-bank company scope."})
+        self.assertEqual(rules, [])
+        self.assertEqual(summary, "Private-bank company scope.")
+
     def test_rejects_unavailable_fields(self):
         with self.assertRaises(GeminiScreenerError):
             validate_gemini_screen({"rules": [{"field": "revenue_growth", "operator": ">", "value": 20}], "summary": "bad"})
@@ -23,10 +28,10 @@ class GeminiScreenerTests(unittest.TestCase):
             {"Symbol": "AXISBANK", "Company": "Axis Bank", "Industry": "Financial Services"},
             {"Symbol": "SBIN", "Company": "State Bank of India", "Industry": "Financial Services"},
         ]
-        payload = {"rules": [{"field": "pe", "operator": "<", "value": 15}], "summary": "Private-bank value screen.", "symbols": ["AXISBANK"]}
+        payload = {"rules": [{"field": "pe", "operator": "<", "value": 15}], "summary": "Private-bank value screen.", "symbols": ["AXISBANK"], "unresolved_requirements": []}
         with patch("gemini_screener._generate_json", return_value=payload):
-            rules, summary, symbols = translate_screener_request_with_universe("Private banks with PE below 15", universe, "test-key")
-        self.assertEqual((rules[0].field, rules[0].value, summary, symbols), ("pe", 15.0, "Private-bank value screen.", ["AXISBANK"]))
+            rules, summary, symbols, unresolved = translate_screener_request_with_universe("Private banks with PE below 15", universe, "test-key")
+        self.assertEqual((rules[0].field, rules[0].value, summary, symbols, unresolved), ("pe", 15.0, "Private-bank value screen.", ["AXISBANK"], []))
 
     def test_shortlist_rejects_symbol_outside_screen(self):
         payload = {"candidates": [{"symbol": "OUTSIDE", "screen_evidence": "P/E is shown in the supplied screen.", "counterpoint": "ROE is missing.", "next_step": "Open the chart."}]}
