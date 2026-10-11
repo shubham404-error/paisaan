@@ -1130,31 +1130,26 @@ def screener(data: pd.DataFrame):
         return
     if fundamental_query.strip():
         api_key, gemini_model = gemini_settings()
-        ai_enabled = st.toggle("Use Gemini to interpret my request", value=bool(api_key), disabled=not bool(api_key))
-        if not api_key:
-            st.caption("Add GEMINI_API_KEY in Streamlit secrets to enable AI interpretation. Manual rules such as 'PE under 25 and ROE above 15%' still work.")
-        rules = None
         try:
-            if ai_enabled:
+            if api_key:
                 interpretation_key = f"gemini-rules:{fundamental_query.strip()}"
-                if st.button("Interpret with Gemini", type="primary"):
-                    st.session_state[interpretation_key] = translate_screener_request(fundamental_query, api_key, gemini_model)
-                interpretation = st.session_state.get(interpretation_key)
-                if interpretation is None:
-                    st.info("Gemini will translate your sentence into supported, reviewable filters before Yahoo Finance data is requested.")
-                    return
+                if interpretation_key not in st.session_state:
+                    with st.spinner("Gemini is translating your screen..."):
+                        st.session_state[interpretation_key] = translate_screener_request(fundamental_query, api_key, gemini_model)
+                interpretation = st.session_state[interpretation_key]
                 rules, summary = interpretation
                 st.caption(f"Gemini interpretation: {safe_text(summary)}")
             else:
+                st.caption("Gemini is not configured, so this request is being interpreted with the available rule parser.")
                 rules = parse_fundamental_query(fundamental_query)
             rule_summary = " and ".join(f"{FIELD_LABELS[rule.field]} {rule.operator} {rule.value:g}" for rule in rules)
             st.caption(f"Applied rules: {rule_summary}")
             fundamental_key = f"fundamentals:{tuple(result['Symbol'].tolist())}"
-            if st.button(f"Run fundamental screen across {len(result)} stocks"):
+            if st.button(f"Run fundamental screen across {len(result)} stocks", type="primary"):
                 st.session_state[fundamental_key] = yahoo_fundamentals(tuple(result["Symbol"].tolist()))
             fundamentals = st.session_state.get(fundamental_key)
             if fundamentals is None:
-                st.info("Rules are ready. Run the screen when you want to enrich this EOD shortlist; results are cached for six hours.")
+                st.info("Your request is ready. Run the screen to enrich this EOD shortlist with Yahoo Finance fundamentals.")
                 return
             result = filter_fundamentals(result.merge(fundamentals, on="Symbol", how="left"), rules)
             preset_copy = f"{preset_copy} plus Yahoo fundamentals"
