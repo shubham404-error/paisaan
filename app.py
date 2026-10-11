@@ -27,6 +27,7 @@ st.set_page_config(page_title="paisaan · CapitalSense Advisors", page_icon="₹
 ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
 AI_RESEARCH_SCHEMA_VERSION = "v2"
 TRENDLYNE_WIDGET_BASE_URL = "https://trendlyne.com/web-widget"
+TRADINGVIEW_TECHNICAL_SCRIPT = "https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js"
 
 
 def safe_text(value: object) -> str:
@@ -93,6 +94,40 @@ def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
         )
         return
     components.iframe(url, height=height, scrolling=True)
+
+
+def tradingview_symbol(symbol: str) -> str:
+    """Map verified NSE symbols to TradingView's public exchange-qualified form."""
+    overrides = {"M&M": "M_M"}
+    public_symbol = symbol.strip().upper()
+    return f"NSE:{overrides.get(public_symbol, public_symbol)}"
+
+
+def tradingview_technical_widget(symbol: str, height: int) -> None:
+    """Render TradingView's official technical-summary widget in an isolated frame."""
+    tv_symbol = tradingview_symbol(symbol)
+    settings = json.dumps({
+        "colorTheme": "dark",
+        "displayMode": "multiple",
+        "isTransparent": False,
+        "locale": "en",
+        "interval": "1D",
+        "disableInterval": False,
+        "showIntervalTabs": True,
+        "width": "100%",
+        "height": height - 36,
+        "symbol": tv_symbol,
+    })
+    technicals_url = f"https://www.tradingview.com/symbols/{quote(tv_symbol.replace(':', '-'), safe='-')}/technicals/"
+    components.html(
+        f"""<div class="tradingview-widget-container" style="height:{height}px;width:100%;background:#0b1016">
+<div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div>
+<div class="tradingview-widget-copyright"><a href="{escape(technicals_url, quote=True)}" rel="noopener nofollow" target="_blank">{escape(symbol)} technical summary</a><span> by TradingView</span></div>
+<script type="text/javascript" src="{TRADINGVIEW_TECHNICAL_SCRIPT}" async>{settings}</script>
+</div>""",
+        height=height,
+        scrolling=False,
+    )
 
 
 @st.cache_resource
@@ -963,12 +998,13 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             if stale:
                 st.caption("Showing the last valid Yahoo Finance chart from this session.")
             if st.toggle(
-                "Load optional Trendlyne technical panel",
+                "Load TradingView technical summary",
                 value=False,
-                key=f"analysis-load-trendlyne-technical:{chat_key}:{chart_symbol}",
-                help="Loads Trendlyne's separate third-party technical snapshot only when needed.",
+                key=f"analysis-load-tradingview-technical:{chat_key}:{chart_symbol}",
+                help="Loads TradingView's optional moving-average and oscillator summary alongside the Yahoo Finance chart.",
             ):
-                trendlyne_widget("technical-widget", chart_symbol, 520)
+                st.caption("TradingView technical ratings summarize mechanical moving-average and oscillator signals; they are not investment advice.")
+                tradingview_technical_widget(chart_symbol, 520)
         except (YahooChartError, ValueError):
             st.warning(f"This {chart_range} Yahoo Finance chart is temporarily unavailable.")
     st.markdown("<div class='section-title'>Keep the names worth revisiting</div>", unsafe_allow_html=True)
@@ -1404,10 +1440,10 @@ def charts(data: pd.DataFrame):
     rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
     figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
     st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-    show_trendlyne_technicals = st.toggle("Show Trendlyne technical panel", key="trendlyne-chart-toggle", help="Opens Trendlyne's third-party technical widget for the chart symbol.")
-    if show_trendlyne_technicals:
-        st.markdown(f"<div class='section-title'>Trendlyne technicals <span class='small-note'>/ {safe_text(symbol)}</span></div><p class='section-copy'>A provider-supplied technical snapshot alongside the Yahoo Finance chart above.</p>", unsafe_allow_html=True)
-        trendlyne_widget("technical-widget", symbol, 550)
+    show_tradingview_technicals = st.toggle("Load TradingView technical summary", key="tradingview-chart-toggle", help="Opens TradingView's third-party moving-average and oscillator summary for the chart symbol.")
+    if show_tradingview_technicals:
+        st.markdown(f"<div class='section-title'>TradingView technical summary <span class='small-note'>/ {safe_text(symbol)}</span></div><p class='section-copy'>An optional provider view of mechanical moving-average and oscillator signals, alongside the Yahoo Finance chart above.</p>", unsafe_allow_html=True)
+        tradingview_technical_widget(symbol, 550)
     chart_question_chat(history, symbol, range_label)
     st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
