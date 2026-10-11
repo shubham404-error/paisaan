@@ -1229,13 +1229,15 @@ def screener(data: pd.DataFrame):
     default_table_choices = [choice for choice in ("Last price", "P/E", "Market cap", "Dividend yield") if choice in table_choices]
     if len(default_table_choices) == 1:
         default_table_choices = [choice for choice in ("Industry", "Last price", "Day move") if choice in table_choices]
-    selected_table_choices = st.multiselect(
-        "Table columns",
-        list(table_choices),
-        default=default_table_choices,
-        key="screener-table-columns-v3",
-        help="Dividend yield is the annual dividend as a percentage of the current share price. It is optional because it matters mainly for income-focused research.",
-    )
+    st.caption("Tick only the columns you want to compare. Dividend yield is annual dividend as a percentage of the current share price.")
+    selected_table_choices: list[str] = []
+    checkbox_columns = st.columns(4)
+    for index, choice in enumerate(table_choices):
+        checkbox_key = f"screener-table-column-v4:{choice}"
+        if checkbox_key not in st.session_state:
+            st.session_state[checkbox_key] = choice in default_table_choices
+        if checkbox_columns[index % 4].checkbox(choice, key=checkbox_key):
+            selected_table_choices.append(choice)
     requested_returns = [table_choices[choice] for choice in selected_table_choices if choice.endswith(" return")]
     if requested_returns:
         return_key = f"screener-returns:{tuple(result['Symbol'].tolist())}"
