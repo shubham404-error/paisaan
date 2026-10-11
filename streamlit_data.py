@@ -6,9 +6,10 @@ runtime and displays the source timestamp to users.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 import time
+from collections.abc import Callable
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -57,13 +58,25 @@ def fetch_constituents() -> list[dict]:
     return frame.to_dict("records")
 
 
-def fetch_quotes(constituents: list[dict]) -> list[dict]:
+def fetch_quotes(constituents: list[dict], on_progress: Callable[[int, int], None] | None = None) -> list[dict]:
     """Retrieve quotes only for verified Nifty 200 members, in MCP-safe batches."""
     symbols = [item["symbol"] for item in constituents]
     batches = [symbols[offset:offset + 50] for offset in range(0, len(symbols), 50)]
+    if on_progress:
+        on_progress(0, len(symbols))
     with ThreadPoolExecutor(max_workers=4) as executor:
-        responses = list(executor.map(lambda batch: _retry(lambda: call_nse_tool("get_bulk_quote", {"symbols": batch}, BHAVCOPY_URL), "Nifty 200 quotes"), batches))
-    by_symbol = {quote["symbol"]: quote for response in responses for quote in response.get("quotes", [])}
+        futures = {
+            executor.submit(_retry, lambda batch=batch: call_nse_tool("get_bulk_quote", {"symbols": batch}, BHAVCOPY_URL), "Nifty 200 quotes"): index
+            for index, batch in enumerate(batches)
+        }
+        responses: list[dict | None] = [None] * len(batches)
+        completed = 0
+        for future in as_completed(futures):
+            responses[futures[future]] = future.result()
+            completed += 1
+            if on_progress:
+                on_progress(min(completed * 50, len(symbols)), len(symbols))
+    by_symbol = {quote["symbol"]: quote for response in responses if response for quote in response.get("quotes", [])}
     rows = [{**item, **by_symbol[item["symbol"]]} for item in constituents if item["symbol"] in by_symbol]
     if len(rows) != 200:
         raise RuntimeError(f"NSE Bhavcopy returned {len(rows)} of 200 verified Nifty 200 quotes. Try again shortly.")

@@ -164,6 +164,8 @@ def inject_css():
       @media (max-width: 760px) { .screener-hero-top { display:block; } .screener-hero-note { margin-top:.8rem; max-width:none; } .guide-steps { grid-template-columns:1fr; } }
       .scan-summary { padding:.7rem .85rem; border:1px solid #26313d; border-radius:12px; background:rgba(16,22,29,.72); color:#b9c3ce; font-size:.82rem; }
       .scan-summary b { color:#f0f4f8; }
+      .screener-idle { padding:1.15rem 1.2rem; margin-top:1rem; border:1px dashed #315048; border-radius:14px; background:linear-gradient(110deg, rgba(43,212,164,.07), rgba(43,212,164,.015)); }
+      .screener-idle b { display:block; margin-bottom:.22rem; color:#edf4f3; font-size:1rem; }
       .watchlist-hero { position:relative; overflow:hidden; padding:1.35rem 1.5rem; margin-bottom:1rem; border:1px solid #2a4842; border-radius:18px; background:linear-gradient(120deg, rgba(14,39,36,.95), rgba(14,21,30,.92)); }
       .watchlist-hero:after { content:""; position:absolute; width:260px; height:260px; right:-100px; top:-150px; border:1px solid rgba(43,212,164,.18); border-radius:50%; box-shadow:0 0 0 35px rgba(43,212,164,.025), 0 0 0 70px rgba(43,212,164,.02); }
       .watchlist-hero-inner { position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
@@ -186,14 +188,52 @@ def inject_css():
     """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=600, show_spinner="Loading official Nifty 200 data from NSE MCP…")
-def live_universe() -> tuple[pd.DataFrame, str]:
-    """Load verified Nifty 200 quotes directly; no API service is required."""
-    rows = fetch_quotes(fetch_constituents())
+MARKET_LOADING_QUOTES = (
+    "A green candle is a fact. A reason is research.",
+    "The market charges tuition; good notes cost less.",
+    "Price moves fast. Context catches up slowly.",
+    "No jaldibaazi: a screen is a starting point, not a finish line.",
+    "Paisa follows patience more often than panic.",
+)
+
+
+def universe_frame(rows: list[dict]) -> tuple[pd.DataFrame, str]:
+    """Normalise one fully verified NSE snapshot for every app page."""
     frame = pd.DataFrame(rows).rename(columns={"symbol": "Symbol", "company": "Company", "industry": "Industry", "close": "Price", "pct_change": "Change %", "volume": "Volume", "high": "Day High", "low": "Day Low", "prev_close": "Previous Close"})
     if frame.empty:
         raise RuntimeError("NSE returned no Nifty 200 rows.")
     return frame, str(frame["date"].iloc[0])
+
+
+def load_market_snapshot() -> tuple[pd.DataFrame, str]:
+    """Fetch only after an explicit user request, with truthful batch progress."""
+    title = st.empty()
+    progress = st.progress(0, text="Preparing the Nifty 200 snapshot...")
+    quote = st.empty()
+    quote_index = 0
+
+    def update(percent: int, text: str) -> None:
+        nonlocal quote_index
+        progress.progress(percent, text=text)
+        quote.caption(f"Market learning #{quote_index + 1}: {MARKET_LOADING_QUOTES[quote_index % len(MARKET_LOADING_QUOTES)]}")
+        quote_index += 1
+
+    try:
+        title.markdown("<div class='section-title'>Bringing the market desk online</div><p class='section-copy'>Official constituents first, then four NSE quote batches.</p>", unsafe_allow_html=True)
+        update(5, "Checking the official Nifty 200 universe...")
+        constituents = fetch_constituents()
+        update(20, "Universe verified - loading NSE EOD quotes...")
+
+        def quote_progress(loaded: int, total: int) -> None:
+            update(20 + int((loaded / max(total, 1)) * 75), f"Loaded {loaded} of {total} Nifty 200 quotes...")
+
+        data, updated = universe_frame(fetch_quotes(constituents, on_progress=quote_progress))
+        update(100, "NSE snapshot ready.")
+        return data, updated
+    finally:
+        progress.empty()
+        quote.empty()
+        title.empty()
 
 
 def sector_snapshot(data: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
@@ -817,7 +857,7 @@ def dashboard(data: pd.DataFrame, updated: str):
     market_tape(data)
     meme_gif = local_gif_data_uri("money-follows-my-brotha-ravi-kishan.gif")
     meme_markup = f"<img class='hero-gif' src='{meme_gif}' alt='Ravi Kishan says money follows my brutha'>" if meme_gif else ""
-    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · Nifty 200 desk</div><h1>more pehchaan.<br><span class='glow'>less paisaan.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>Start with the market pulse, open one clean chart, then take only the names worth researching further.</p><div class='header-chips'><span class='header-chip'><b>Pulse</b> see breadth & sectors</span><span class='header-chip'><b>Price</b> inspect a 1-year chart</span><span class='header-chip'><b>Proof</b> screen before you chase</span></div><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· no jaldibaazi, facts follow.</span></div>{meme_markup}</section>", unsafe_allow_html=True)
+    st.markdown(f"<section class='hero'><div class='eyebrow'>CapitalSense Advisors · Nifty 200 desk</div><h1>paisa moves.<br><span class='glow'>pehchaan stays.</span></h1><p class='small-note' style='font-size:.98rem;max-width:42rem'>Start with the market pulse, open one clean chart, then take only the names worth researching further.</p><div class='header-chips'><span class='header-chip'><b>Pulse</b> see breadth & sectors</span><span class='header-chip'><b>Price</b> inspect a 1-year chart</span><span class='header-chip'><b>Proof</b> screen before you chase</span></div><div class='sentiment'>{sentiment}</div><div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· no jaldibaazi, facts follow.</span></div>{meme_markup}</section>", unsafe_allow_html=True)
     st.markdown("<div class='source-note'>Universe: official Nifty 200 constituents · Prices: NSE Bhavcopy · Sector movement shown as equal-weighted constituent return.</div>", unsafe_allow_html=True)
     advances = int((data["Change %"] > 0).sum())
     declines = int((data["Change %"] < 0).sum())
@@ -934,6 +974,20 @@ def screener(data: pd.DataFrame):
         placeholder="Find reasonably valued companies with strong returns on equity and a dividend",
         help="AI can translate normal language into the available Yahoo Finance filters: P/E, P/B, ROE, dividend yield and market cap.",
     )
+    screen_is_active = any((
+        preset != "All stocks",
+        bool(query.strip()),
+        industry != "All",
+        min_change != 0,
+        max_change != 0,
+        min_price > 0,
+        max_price > 0,
+        min_day_range_position > 0,
+        bool(fundamental_query.strip()),
+    ))
+    if not screen_is_active:
+        st.markdown("<div class='screener-idle'><b>Start with a question, not a spreadsheet.</b><span class='small-note'>Choose a quick scan, search a name, pick an industry, refine a price setup, or describe a fundamental idea. We will show only the results that answer it.</span></div>", unsafe_allow_html=True)
+        return
     if fundamental_query.strip():
         api_key, gemini_model = gemini_settings()
         ai_enabled = st.toggle("Use Gemini to interpret my request", value=bool(api_key), disabled=not bool(api_key))
@@ -1022,12 +1076,13 @@ def screener(data: pd.DataFrame):
         else:
             st.info("Choose one to five stocks from this screen to open their Trendlyne scorecards.")
     research_workbench(result, str(data["date"].iloc[0]), preset_copy, sort_label)
-    inspect_col, action_col, watch_add_col = st.columns([3, 1, 1], vertical_alignment="bottom")
-    inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
-
-    action_col.button("Open chart", use_container_width=True, on_click=open_chart_for, args=(inspect_symbol,))
-    watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
-    watchlist_add_control([inspect_symbol], set(data["Symbol"]), f"screener:{inspect_symbol}")
+    show_screen_chart = st.toggle("Open a chart from this screen", key="screener-chart-toggle", help="Keep the screen focused on comparison; open a chart only when a result needs a closer look.")
+    if show_screen_chart:
+        inspect_col, action_col, watch_add_col = st.columns([3, 1, 1], vertical_alignment="bottom")
+        inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
+        action_col.button("Open chart", use_container_width=True, on_click=open_chart_for, args=(inspect_symbol,))
+        watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
+        watchlist_add_control([inspect_symbol], set(data["Symbol"]), f"screener:{inspect_symbol}")
     st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
 
 
@@ -1081,32 +1136,56 @@ def charts(data: pd.DataFrame):
 
 
 inject_css()
-try:
-    data, updated = live_universe()
-except Exception as error:
-    st.error(f"NSE data could not be loaded: {error}")
-    if st.button("Try NSE data again"):
-        live_universe.clear()
-        st.rerun()
-    st.stop()
-import_shared_watchlist_from_url(set(data["Symbol"]))
+snapshot = st.session_state.get("market_snapshot")
+load_requested = False
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
     page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlists"], label_visibility="collapsed", key="page")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
-    if st.button("Refresh NSE data", use_container_width=True):
+    if snapshot is None:
+        load_requested = st.button("Load NSE snapshot", type="primary", use_container_width=True)
+        st.caption("Load official Nifty 200 constituents and the latest NSE EOD quotes when you are ready.")
+    elif st.button("Refresh NSE data", use_container_width=True):
         allowed, remaining = refresh_gate().request()
         if allowed:
-            live_universe.clear()
             yahoo_chart_history.clear()
             yahoo_fundamentals.clear()
-            st.rerun()
-        st.caption(f"Refresh available in {remaining}s.")
-    st.success("Direct NSE data")
-    st.caption("Official Nifty 200 constituents · cached in Streamlit · no jaldibaazi")
+            load_requested = True
+        else:
+            st.caption(f"Refresh available in {remaining}s.")
+    if snapshot is not None:
+        st.success("Direct NSE data")
+    if snapshot is not None:
+        st.caption("Official Nifty 200 constituents · loaded for this session · no jaldibaazi")
     st.caption("Market data is informational only; it is not investment advice.")
 
+if snapshot is None:
+    st.markdown("""
+    <section class='hero'>
+      <div class='eyebrow'>CapitalSense Advisors · market desk</div>
+      <h1>Ready when the<br><span class='glow'>market is.</span></h1>
+      <p class='small-note' style='font-size:.98rem;max-width:42rem'>The app opens fast by design. Load the verified Nifty 200 snapshot only when you want to begin your research.</p>
+      <div class='header-chips'><span class='header-chip'><b>200</b> official constituents</span><span class='header-chip'><b>4</b> NSE quote batches</span><span class='header-chip'><b>0</b> background data calls</span></div>
+      <div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· tap in when you are ready.</span></div>
+    </section>
+    """, unsafe_allow_html=True)
+    load_requested = st.button("Load the Nifty 200 snapshot", type="primary") or load_requested
+
+if load_requested:
+    try:
+        st.session_state["market_snapshot"] = load_market_snapshot()
+        st.rerun()
+    except Exception as error:
+        st.error(f"NSE data could not be loaded: {error}")
+        st.caption("The page is still usable; try loading the snapshot again in a moment.")
+
+snapshot = st.session_state.get("market_snapshot")
+if snapshot is None:
+    st.stop()
+
+data, updated = snapshot
+import_shared_watchlist_from_url(set(data["Symbol"]))
 if page == "Dashboard":
     dashboard(data, updated)
 elif page == "Screener":

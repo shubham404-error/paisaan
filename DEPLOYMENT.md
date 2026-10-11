@@ -22,7 +22,7 @@
 
 - NSE MCP is an upstream public service. The app retries failed constituent and quote requests three times with backoff, then presents a retry button.
 - Yahoo Finance supplies selected-symbol daily charts. A Yahoo rate limit or provider error leaves the last valid session chart available.
-- Market data is cached in the Streamlit runtime: quotes for 10 minutes, Yahoo charts for four hours, and Yahoo screener fundamentals for six hours.
+- NSE data is fetched only after a user explicitly loads or refreshes the snapshot, then retained for that browser session. Yahoo charts are cached for four hours and Yahoo screener fundamentals for six hours.
 - Gemini is an optional text-to-filter interpreter. Its output is validated against the Screener's fixed set of fundamental fields and operators before Yahoo data is requested.
 - Watchlists are session-only in this deployment. Users can download and later upload a JSON export; Google-backed hosted sync is deliberately deferred.
 - The full-universe screener uses cached EOD fields. A durable 200-stock historical technical screen needs external persistence and scheduled workers, which are deliberately outside this Streamlit-only deployment.
