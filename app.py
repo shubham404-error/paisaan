@@ -1282,14 +1282,13 @@ if snapshot is None:
       <h1>Ready when the<br><span class='glow'>market is.</span></h1>
       <p class='small-note' style='font-size:.98rem;max-width:42rem'>The app opens fast by design. Load the verified Nifty 200 snapshot only when you want to begin your research.</p>
       <div class='header-chips'><span class='header-chip'><b>200</b> official constituents</span><span class='header-chip'><b>4</b> NSE quote batches</span><span class='header-chip'><b>0</b> background data calls</span></div>
-      <div class='meme-note'>paisa + pehchaan = <b>paisaan</b> <span>· tap in when you are ready.</span></div>
     </section>
     """, unsafe_allow_html=True)
     with st.container(border=True):
         action_col, copy_col, note_col = st.columns([1.2, 2.25, 1.45], vertical_alignment="center")
         load_requested = action_col.button("Start market scan", type="primary", use_container_width=True) or load_requested
         copy_col.markdown("<div class='load-cta-copy'><b>Load the verified Nifty 200 snapshot</b><span>Official constituents and the latest NSE EOD quotes, loaded only when you choose.</span></div>", unsafe_allow_html=True)
-        note_col.markdown("<div class='load-cta-note'>Takes a moment. You will see real loading progress—not a fake market tantrum.</div>", unsafe_allow_html=True)
+        note_col.markdown("<div class='load-cta-note'><b>paisa + pehchaan = paisaan.</b><br>Takes a moment; you will see real progress, no jaldibaazi.</div>", unsafe_allow_html=True)
 
 if load_requested:
     try:
