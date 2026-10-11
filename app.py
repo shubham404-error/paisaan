@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request
+from gemini_screener import DEFAULT_MODEL, GeminiScreenerError, ask_chart_question, ask_stock_comparison, build_chart_research_cues, build_research_shortlist, compare_research_stocks, translate_screener_request, translate_screener_request_with_universe
 from streamlit_data import fetch_constituents, fetch_quotes
 from refresh_control import RefreshGate
 from screener_service import FIELD_LABELS, fetch_yahoo_fundamentals, filter_fundamentals, parse_fundamental_query
@@ -337,6 +337,25 @@ def yahoo_relative_returns(symbols: tuple[str, ...]) -> pd.DataFrame:
     normalized = aligned.divide(aligned.iloc[0]).subtract(1).multiply(100)
     normalized.index.name = "Date"
     return normalized.reset_index()
+
+
+@st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading selected Yahoo Finance return windows...")
+def yahoo_screener_returns(symbols: tuple[str, ...]) -> pd.DataFrame:
+    """Load only opted-in return columns for the current screener result set."""
+    rows: list[dict] = []
+    windows = {"1W return": 5, "1M return": 22, "3M return": 66, "1Y return": 252}
+    for public_symbol in symbols:
+        try:
+            close = yahoo_chart_history(yahoo_symbol(public_symbol), "1y", "1d", ADJUSTMENT_CONTRACT)["Close"]
+            row: dict[str, object] = {"Symbol": public_symbol}
+            for label, days in windows.items():
+                row[label] = ((close.iloc[-1] / close.iloc[-days - 1]) - 1) * 100 if len(close) > days else None
+            rows.append(row)
+        except (YahooChartError, ValueError, IndexError):
+            continue
+    if not rows:
+        raise YahooChartError("Yahoo Finance could not provide return history for this screen.")
+    return pd.DataFrame(rows)
 
 
 def relative_returns_chart(frame: pd.DataFrame, symbols: tuple[str, ...]) -> go.Figure:
@@ -1128,6 +1147,7 @@ def screener(data: pd.DataFrame):
     if not screen_is_active:
         st.markdown("<div class='screener-idle'><b>Start with a question, not a spreadsheet.</b><span class='small-note'>Choose a quick scan, search a name, pick an industry, refine a price setup, or describe a fundamental idea. We will show only the results that answer it.</span></div>", unsafe_allow_html=True)
         return
+    ai_scope_symbols: list[str] = []
     if fundamental_query.strip():
         api_key, gemini_model = gemini_settings()
         try:
@@ -1135,10 +1155,14 @@ def screener(data: pd.DataFrame):
                 interpretation_key = f"gemini-rules:{fundamental_query.strip()}"
                 if interpretation_key not in st.session_state:
                     with st.spinner("Gemini is translating your screen..."):
-                        st.session_state[interpretation_key] = translate_screener_request(fundamental_query, api_key, gemini_model)
+                        universe_context = result[["Symbol", "Company", "Industry"]].to_dict(orient="records")
+                        st.session_state[interpretation_key] = translate_screener_request_with_universe(fundamental_query, universe_context, api_key, gemini_model)
                 interpretation = st.session_state[interpretation_key]
-                rules, summary = interpretation
+                rules, summary, ai_scope_symbols = interpretation
                 st.caption(f"Gemini interpretation: {safe_text(summary)}")
+                if ai_scope_symbols:
+                    result = result[result["Symbol"].isin(ai_scope_symbols)]
+                    st.caption(f"Gemini company scope: {', '.join(ai_scope_symbols)}")
             else:
                 st.caption("Gemini is not configured, so this request is being interpreted with the available rule parser.")
                 rules = parse_fundamental_query(fundamental_query)
@@ -1169,9 +1193,45 @@ def screener(data: pd.DataFrame):
     metric_b.metric("Advancing", matched_advancers, f"{matched_advancers / len(result):.0%} of scan")
     metric_c.metric("Average move", f"{result['Change %'].mean():+.2f}%")
     metric_d.metric("Industries", result["Industry"].nunique(), "represented in scan")
-    shown_columns = ["Symbol", "Company", "Industry", "Price", "Change %", "Day range %"]
-    if fundamental_query.strip():
-        shown_columns += [column for column in ("pe", "pb", "roe", "dividend_yield", "market_cap_cr") if column in result]
+    st.markdown("<div class='section-title'>Shape this table</div><p class='section-copy'>Keep the view compact: choose the evidence you need for this particular screen. Return windows load from Yahoo Finance only when selected.</p>", unsafe_allow_html=True)
+    table_choices = {
+        "Industry": "Industry",
+        "Last price": "Price",
+        "Day move": "Change %",
+        "Close in day range": "Day range %",
+        "1W return": "1W return",
+        "1M return": "1M return",
+        "3M return": "3M return",
+        "1Y return": "1Y return",
+    }
+    if any(column in result for column in ("pe", "pb", "roe", "dividend_yield", "market_cap_cr")):
+        table_choices.update({
+            "P/E": "pe", "P/B": "pb", "ROE": "roe", "Dividend yield": "dividend_yield", "Market cap": "market_cap_cr",
+        })
+    selected_table_choices = st.multiselect(
+        "Table columns",
+        list(table_choices),
+        default=[choice for choice in ("Industry", "Last price", "Day move") if choice in table_choices],
+        key="screener-table-columns",
+        help="Dividend yield is the annual dividend as a percentage of the current share price. It is optional because it matters mainly for income-focused research.",
+    )
+    requested_returns = [table_choices[choice] for choice in selected_table_choices if choice.endswith(" return")]
+    if requested_returns:
+        return_key = f"screener-returns:{tuple(result['Symbol'].tolist())}"
+        if return_key not in st.session_state:
+            try:
+                with st.spinner("Loading the selected return windows from Yahoo Finance..."):
+                    st.session_state[return_key] = yahoo_screener_returns(tuple(result["Symbol"].tolist()))
+            except YahooChartError as error:
+                st.warning(str(error))
+        return_frame = st.session_state.get(return_key)
+        if return_frame is not None:
+            result = result.merge(return_frame, on="Symbol", how="left")
+        else:
+            requested_returns = []
+    shown_columns = ["Symbol", "Company"] + [table_choices[choice] for choice in selected_table_choices if table_choices[choice] not in {"1W return", "1M return", "3M return", "1Y return"}]
+    shown_columns += requested_returns
+    shown_columns = list(dict.fromkeys(column for column in shown_columns if column in result))
     shown = result[shown_columns].copy()
     shown.insert(0, "Rank", range(1, len(shown) + 1))
     column_config = {
@@ -1184,6 +1244,10 @@ def screener(data: pd.DataFrame):
         "roe": st.column_config.NumberColumn("ROE", format="%.1f%%"),
         "dividend_yield": st.column_config.NumberColumn("Yield", format="%.1f%%"),
         "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
+        "1W return": st.column_config.NumberColumn("1W return", format="%+.2f%%"),
+        "1M return": st.column_config.NumberColumn("1M return", format="%+.2f%%"),
+        "3M return": st.column_config.NumberColumn("3M return", format="%+.2f%%"),
+        "1Y return": st.column_config.NumberColumn("1Y return", format="%+.2f%%"),
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
     st.markdown("<div class='section-title'>Ready to compare?</div><p class='section-copy'>Select 2–5 candidates, then take the evidence to Analyse. This screen stays focused on finding the names.</p>", unsafe_allow_html=True)

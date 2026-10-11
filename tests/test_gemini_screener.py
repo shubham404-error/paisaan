@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from gemini_screener import GeminiScreenerError, ask_chart_question, ask_stock_comparison, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
+from gemini_screener import GeminiScreenerError, ask_chart_question, ask_stock_comparison, translate_screener_request_with_universe, validate_chart_cues, validate_gemini_screen, validate_research_comparison, validate_research_shortlist
 
 
 class GeminiScreenerTests(unittest.TestCase):
@@ -17,6 +17,16 @@ class GeminiScreenerTests(unittest.TestCase):
     def test_rejects_unsafe_values(self):
         with self.assertRaises(GeminiScreenerError):
             validate_gemini_screen({"rules": [{"field": "pe", "operator": "<", "value": -1}], "summary": "bad"})
+
+    def test_universe_context_keeps_only_named_nifty_200_companies(self):
+        universe = [
+            {"Symbol": "AXISBANK", "Company": "Axis Bank", "Industry": "Financial Services"},
+            {"Symbol": "SBIN", "Company": "State Bank of India", "Industry": "Financial Services"},
+        ]
+        payload = {"rules": [{"field": "pe", "operator": "<", "value": 15}], "summary": "Private-bank value screen.", "symbols": ["AXISBANK"]}
+        with patch("gemini_screener._generate_json", return_value=payload):
+            rules, summary, symbols = translate_screener_request_with_universe("Private banks with PE below 15", universe, "test-key")
+        self.assertEqual((rules[0].field, rules[0].value, summary, symbols), ("pe", 15.0, "Private-bank value screen.", ["AXISBANK"]))
 
     def test_shortlist_rejects_symbol_outside_screen(self):
         payload = {"candidates": [{"symbol": "OUTSIDE", "screen_evidence": "P/E is shown in the supplied screen.", "counterpoint": "ROE is missing.", "next_step": "Open the chart."}]}

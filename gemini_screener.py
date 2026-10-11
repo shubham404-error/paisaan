@@ -34,6 +34,43 @@ def translate_screener_request(query: str, api_key: str, model: str = DEFAULT_MO
     return validate_gemini_screen(result)
 
 
+def translate_screener_request_with_universe(
+    query: str, universe: list[dict[str, str]], api_key: str, model: str = DEFAULT_MODEL
+) -> tuple[list[FundamentalRule], str, list[str]]:
+    """Translate a screen and optionally constrain it to named Nifty 200 constituents.
+
+    The model may only return symbols that are in the compact company/industry packet.
+    This lets phrases such as "private banks" become a visible, auditable candidate set.
+    """
+    request_text = query.strip()
+    if not api_key.strip():
+        raise GeminiScreenerError("Add GEMINI_API_KEY to Streamlit secrets to use AI interpretation.")
+    if not request_text or len(request_text) > _MAX_QUERY_LENGTH:
+        raise GeminiScreenerError("Describe the screen in 1 to 400 characters.")
+    allowed_symbols = {str(item.get("Symbol", "")).upper() for item in universe}
+    if not allowed_symbols:
+        raise GeminiScreenerError("The Nifty 200 universe is unavailable for this screen.")
+    prompt = (
+        _prompt(request_text)
+        + " Use the supplied Nifty 200 universe to resolve any explicit sector, sub-sector, business-type, or company-group intent "
+        "in the user's words (for example, private banks). Return every matching exact symbol from this universe in symbols. "
+        "If the user did not express such an intent, return symbols as an empty list. Never invent a symbol and never make a recommendation.\n"
+        f"NIFTY 200 UNIVERSE:\n{json.dumps(universe, separators=(',', ':'))}"
+    )
+    result = _generate_json(prompt, _context_response_schema(), api_key, model)
+    rules, summary = validate_gemini_screen(result)
+    raw_symbols = result.get("symbols")
+    if not isinstance(raw_symbols, list) or len(raw_symbols) > len(allowed_symbols):
+        raise GeminiScreenerError("Gemini returned an unsupported Nifty 200 company set.")
+    symbols: list[str] = []
+    for raw_symbol in raw_symbols:
+        symbol = str(raw_symbol).upper()
+        if symbol not in allowed_symbols or symbol in symbols:
+            raise GeminiScreenerError("Gemini returned a company outside the Nifty 200 universe.")
+        symbols.append(symbol)
+    return rules, summary, symbols
+
+
 def build_research_shortlist(facts: dict, allowed_symbols: set[str], api_key: str, model: str = DEFAULT_MODEL) -> dict:
     """Return up to three research candidates drawn only from the supplied screen."""
     prompt = (
@@ -288,6 +325,13 @@ def _response_schema() -> dict:
         },
         "required": ["rules", "summary"],
     }
+
+
+def _context_response_schema() -> dict:
+    schema = _response_schema()
+    schema["properties"]["symbols"] = {"type": "array", "items": {"type": "string"}, "maxItems": 200}
+    schema["required"] = ["rules", "summary", "symbols"]
+    return schema
 
 
 def _shortlist_schema() -> dict:
