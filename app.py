@@ -962,7 +962,13 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             st.plotly_chart(market_chart(history, yahoo_symbol(chart_symbol), selected_overlays, days=YAHOO_WINDOWS[chart_range], height=520, rsi_lines=rsi_lines, show_volume_sma=show_volume_sma), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             if stale:
                 st.caption("Showing the last valid Yahoo Finance chart from this session.")
-            trendlyne_widget("technical-widget", chart_symbol, 520)
+            if st.toggle(
+                "Load optional Trendlyne technical panel",
+                value=False,
+                key=f"analysis-load-trendlyne-technical:{chat_key}:{chart_symbol}",
+                help="Loads Trendlyne's separate third-party technical snapshot only when needed.",
+            ):
+                trendlyne_widget("technical-widget", chart_symbol, 520)
         except (YahooChartError, ValueError):
             st.warning(f"This {chart_range} Yahoo Finance chart is temporarily unavailable.")
     st.markdown("<div class='section-title'>Keep the names worth revisiting</div>", unsafe_allow_html=True)
