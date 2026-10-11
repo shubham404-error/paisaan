@@ -5,6 +5,7 @@ from html import escape
 import json
 import os
 from pathlib import Path
+import re
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
@@ -283,6 +284,17 @@ def screened_stocks(
 
 
 YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y": 756}
+PRIVATE_BANK_SYMBOLS = (
+    "HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK", "FEDERALBNK",
+    "IDFCFIRSTB", "INDUSINDBK", "RBLBANK", "YESBANK", "BANDHANBNK",
+)
+
+
+def explicit_company_scope(query: str, available_symbols: set[str]) -> tuple[list[str], str | None]:
+    """Resolve the few high-intent company groups with a transparent local taxonomy."""
+    if re.search(r"\bprivate\s+banks?\b", query, flags=re.IGNORECASE):
+        return [symbol for symbol in PRIVATE_BANK_SYMBOLS if symbol in available_symbols], "Nifty 200 private banks"
+    return [], None
 
 
 @st.cache_data(ttl=4 * 60 * 60, show_spinner="Loading daily Yahoo Finance chart data…")
@@ -1158,11 +1170,14 @@ def screener(data: pd.DataFrame):
                         universe_context = result[["Symbol", "Company", "Industry"]].to_dict(orient="records")
                         st.session_state[interpretation_key] = translate_screener_request_with_universe(fundamental_query, universe_context, api_key, gemini_model)
                 interpretation = st.session_state[interpretation_key]
-                rules, summary, ai_scope_symbols = interpretation
+                rules, summary, model_scope_symbols = interpretation
+                local_scope_symbols, local_scope_label = explicit_company_scope(fundamental_query, set(result["Symbol"]))
+                ai_scope_symbols = local_scope_symbols or model_scope_symbols
                 st.caption(f"Gemini interpretation: {safe_text(summary)}")
                 if ai_scope_symbols:
                     result = result[result["Symbol"].isin(ai_scope_symbols)]
-                    st.caption(f"Gemini company scope: {', '.join(ai_scope_symbols)}")
+                    scope_label = local_scope_label or "Gemini company scope"
+                    st.caption(f"{scope_label}: {', '.join(ai_scope_symbols)}")
             else:
                 st.caption("Gemini is not configured, so this request is being interpreted with the available rule parser.")
                 rules = parse_fundamental_query(fundamental_query)
@@ -1204,15 +1219,18 @@ def screener(data: pd.DataFrame):
         "3M return": "3M return",
         "1Y return": "1Y return",
     }
-    if any(column in result for column in ("pe", "pb", "roe", "dividend_yield", "market_cap_cr")):
-        table_choices.update({
-            "P/E": "pe", "P/B": "pb", "ROE": "roe", "Dividend yield": "dividend_yield", "Market cap": "market_cap_cr",
-        })
+    fundamental_choices = {
+        "P/E": "pe", "P/B": "pb", "ROE": "roe", "Dividend yield": "dividend_yield", "Market cap": "market_cap_cr",
+    }
+    table_choices.update({label: column for label, column in fundamental_choices.items() if column in result and result[column].notna().any()})
+    default_table_choices = [choice for choice in ("Last price", "P/E", "Market cap", "Dividend yield") if choice in table_choices]
+    if len(default_table_choices) == 1:
+        default_table_choices = [choice for choice in ("Industry", "Last price", "Day move") if choice in table_choices]
     selected_table_choices = st.multiselect(
         "Table columns",
         list(table_choices),
-        default=[choice for choice in ("Industry", "Last price", "Day move") if choice in table_choices],
-        key="screener-table-columns",
+        default=default_table_choices,
+        key="screener-table-columns-v3",
         help="Dividend yield is the annual dividend as a percentage of the current share price. It is optional because it matters mainly for income-focused research.",
     )
     requested_returns = [table_choices[choice] for choice in selected_table_choices if choice.endswith(" return")]
@@ -1229,9 +1247,9 @@ def screener(data: pd.DataFrame):
             result = result.merge(return_frame, on="Symbol", how="left")
         else:
             requested_returns = []
-    shown_columns = ["Symbol", "Company"] + [table_choices[choice] for choice in selected_table_choices if table_choices[choice] not in {"1W return", "1M return", "3M return", "1Y return"}]
+    shown_columns = ["Company"] + [table_choices[choice] for choice in selected_table_choices if table_choices[choice] not in {"1W return", "1M return", "3M return", "1Y return"}]
     shown_columns += requested_returns
-    shown_columns = list(dict.fromkeys(column for column in shown_columns if column in result))
+    shown_columns = list(dict.fromkeys(column for column in shown_columns if column in result and (column == "Company" or result[column].notna().any())))
     shown = result[shown_columns].copy()
     shown.insert(0, "Rank", range(1, len(shown) + 1))
     column_config = {
