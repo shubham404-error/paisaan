@@ -64,8 +64,12 @@ def trendlyne_widget_status(widget: str, symbol: str) -> tuple[bool, str]:
         if len(content) < 500:
             return False, "Trendlyne did not return enough widget content."
         return True, ""
-    except (HTTPError, URLError, TimeoutError, OSError):
-        return False, "Trendlyne is temporarily unavailable."
+    except HTTPError as error:
+        return False, f"Trendlyne responded with HTTP {error.code}."
+    except URLError:
+        return False, "Trendlyne could not be reached from this app."
+    except (TimeoutError, OSError):
+        return False, "Trendlyne timed out while loading."
 
 
 def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
@@ -73,7 +77,7 @@ def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
     available, reason = trendlyne_widget_status(widget, symbol)
     if not available:
         title = "QVT scorecard" if widget == "qvt-widget" else "SWOT view" if widget == "swot-widget" else "technical panel"
-        st.info(f"{title} is unavailable for {symbol} right now. {reason} Yahoo Finance research remains available above.")
+        st.warning(f"{title} is unavailable for {symbol} right now. {reason} Yahoo Finance research remains available above.")
         return
     url = trendlyne_widget_url(widget, symbol)
     if widget == "swot-widget":
