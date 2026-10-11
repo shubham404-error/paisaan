@@ -443,8 +443,14 @@ def json_records(frame: pd.DataFrame, columns: list[str], limit: int = 25) -> li
 
 
 def open_chart_for(symbol: str) -> None:
-    st.session_state["page"] = "Charts"
+    st.session_state["page"] = "Analyse"
     st.session_state["chart_symbol"] = symbol
+
+
+def open_analysis_for(symbols: list[str]) -> None:
+    """Hand an explicit Screener shortlist to the analysis workspace."""
+    st.session_state["analysis_candidates"] = symbols[:5]
+    st.session_state["page"] = "Analyse"
 
 
 def render_research_list(title: str, items: list[str]) -> None:
@@ -733,6 +739,131 @@ def research_workbench(result: pd.DataFrame, as_of: str, preset: str, rank_by: s
             chat["messages"].append({"role": "assistant", "content": answer})
 
 
+def analysis_workspace(data: pd.DataFrame) -> None:
+    """Candidate comparison and due-diligence workspace, entered from Screener."""
+    suggested = [symbol for symbol in st.session_state.get("analysis_candidates", []) if symbol in set(data["Symbol"])]
+    st.markdown("""
+    <section class='screener-hero'>
+      <div class='screener-hero-top'>
+        <div class='screener-hero-copy'>
+          <div class='screener-kicker'>Nifty 200 candidate desk</div>
+          <h1>Compare the pehchaan, not just the price.</h1>
+          <div class='small-note'>Bring a short list from Screener, then use the same Yahoo Finance snapshot, benchmarked returns and provider scorecards to decide what deserves a place on your watchlist.</div>
+        </div>
+        <div class='screener-hero-note'><b style='color:#e9eef3'>Best-use shortcut</b><br>Pick 2–5 names. Read the table and return paths first; use the chart only when a price question remains.</div>
+      </div>
+      <div class='guide-steps'>
+        <div class='guide-step'><span class='guide-number'>1</span><b>Compare facts</b><p>Valuation, quality and daily technical context from one comparable data packet.</p></div>
+        <div class='guide-step'><span class='guide-number'>2</span><b>Check the tape</b><p>See each 1Y return beside Nifty 50, then scorecard the candidates.</p></div>
+        <div class='guide-step'><span class='guide-number'>3</span><b>Save the research</b><p>Ask a focused question and add only the names worth revisiting.</p></div>
+      </div>
+    </section>
+    """, unsafe_allow_html=True)
+    selected_symbols = st.multiselect(
+        "Candidates to analyse (2–5)",
+        data["Symbol"].tolist(),
+        default=suggested,
+        max_selections=5,
+        key="analysis-candidate-symbols",
+        placeholder="Start with candidates from Screener, or choose names here",
+    )
+    if len(selected_symbols) < 2:
+        st.markdown("<div class='screener-idle'><b>Bring two to five candidates.</b><span class='small-note'>Run a scan first, select the names to compare, then send them here. No random full-universe spreadsheet, no jaldibaazi.</span></div>", unsafe_allow_html=True)
+        return
+    symbols = tuple(sorted(selected_symbols))
+    chat_key = f"analysis-comparison:v1:{','.join(symbols)}"
+    if st.button("Load comparison", type="primary", key=f"load-{chat_key}"):
+        try:
+            st.session_state[chat_key] = {"facts": yahoo_comparison_facts(symbols), "messages": []}
+        except (YahooChartError, ValueError) as error:
+            st.warning(f"Yahoo Finance comparison data is temporarily unavailable: {error}")
+            return
+    chat = st.session_state.get(chat_key)
+    if chat is None:
+        st.caption("Load a compact Yahoo Finance snapshot only for these selected candidates.")
+        return
+    comparison_table = pd.DataFrame(chat["facts"]["stocks"]).rename(columns={
+        "symbol": "Symbol", "as_of": "As of", "close": "Close", "pe": "P/E", "pb": "P/B", "roe": "ROE %",
+        "dividend_yield": "Yield %", "market_cap_cr": "Mkt cap (Cr)", "rsi_14": "RSI-14", "ema_9": "EMA-9",
+        "ema_21": "EMA-21", "sma_50": "SMA-50", "sma_200": "SMA-200",
+    })
+    table_columns = ["Symbol", "As of", "Close", "P/E", "P/B", "ROE %", "Yield %", "Mkt cap (Cr)", "RSI-14", "EMA-9", "EMA-21", "SMA-50", "SMA-200"]
+    st.markdown("<div class='section-title'>Comparable snapshot</div><p class='section-copy'>Yahoo Finance data for only the candidates you selected. Missing fields stay blank rather than being guessed.</p>", unsafe_allow_html=True)
+    st.dataframe(comparison_table[[column for column in table_columns if column in comparison_table]], use_container_width=True, hide_index=True, column_config={
+        "Close": st.column_config.NumberColumn(format="Rs %.2f"), "P/E": st.column_config.NumberColumn(format="%.1f"),
+        "P/B": st.column_config.NumberColumn(format="%.1f"), "ROE %": st.column_config.NumberColumn(format="%.1f%%"),
+        "Yield %": st.column_config.NumberColumn(format="%.1f%%"), "Mkt cap (Cr)": st.column_config.NumberColumn(format="Rs %.0f Cr"),
+        "RSI-14": st.column_config.NumberColumn(format="%.1f"), "EMA-9": st.column_config.NumberColumn(format="Rs %.2f"),
+        "EMA-21": st.column_config.NumberColumn(format="Rs %.2f"), "SMA-50": st.column_config.NumberColumn(format="Rs %.2f"), "SMA-200": st.column_config.NumberColumn(format="Rs %.2f"),
+    })
+    try:
+        returns = yahoo_relative_returns(symbols)
+        st.markdown("<div class='section-title'>One-year return paths</div><p class='section-copy'>Normalized price returns from the same first common Yahoo Finance observation. Nifty 50 is the context, not a promise.</p>", unsafe_allow_html=True)
+        st.plotly_chart(relative_returns_chart(returns, symbols), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+    except (YahooChartError, ValueError):
+        st.warning("The benchmarked return chart is temporarily unavailable.")
+    st.markdown("<div class='section-title'>Provider scorecards</div><p class='section-copy'>Quality, valuation, technical and SWOT views from Trendlyne. Provider timings can differ from the Yahoo Finance snapshot above.</p>", unsafe_allow_html=True)
+    score_tabs = st.tabs(list(symbols))
+    for tab, symbol in zip(score_tabs, symbols):
+        with tab:
+            qvt_col, swot_col = st.columns(2)
+            with qvt_col:
+                st.markdown("<div class='panel-title'>QVT score</div><div class='panel-subtitle'>Quality · valuation · technicals</div>", unsafe_allow_html=True)
+                trendlyne_widget("qvt-widget", symbol, 365)
+            with swot_col:
+                st.markdown("<div class='panel-title'>SWOT view</div><div class='panel-subtitle'>Strengths · weaknesses · opportunities · threats</div>", unsafe_allow_html=True)
+                trendlyne_widget("swot-widget", symbol, 365)
+    st.markdown("<div class='section-title'>Ask about this comparison</div><p class='section-copy'>Ask a decision-focused question. The AI sees only this selected Yahoo Finance packet.</p>", unsafe_allow_html=True)
+    for message in chat["messages"]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    prompt_columns = st.columns(2)
+    prompts = [
+        ("Valuation", "Which selected stock has the more attractive valuation profile based on the available Yahoo Finance data?"),
+        ("Quality", "How do these stocks compare on available quality signals such as ROE, and what should I inspect next?"),
+        ("Technical setup", "Which selected stock has the stronger current technical setup based on price, RSI, and moving averages?"),
+        ("Decision checklist", "Give me the three most important checks to make before choosing one of these stocks."),
+    ]
+    selected_prompt = None
+    for index, (label, prompt) in enumerate(prompts):
+        if prompt_columns[index % 2].button(label, key=f"analysis-prompt:{chat_key}:{index}", use_container_width=True):
+            selected_prompt = prompt
+    question = selected_prompt or st.chat_input("Ask a follow-up about these candidates", key=f"analysis-ask:{chat_key}")
+    if question:
+        api_key, gemini_model = gemini_settings()
+        if not api_key:
+            st.info("Add GEMINI_API_KEY in Streamlit secrets to enable comparison questions.")
+        else:
+            chat["messages"].append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Comparing the selected Yahoo Finance data..."):
+                    try:
+                        answer = ask_stock_comparison(question, chat["facts"], chat["messages"][:-1], api_key, gemini_model)
+                    except GeminiScreenerError as error:
+                        st.warning(str(error))
+                        return
+                st.markdown(answer)
+            chat["messages"].append({"role": "assistant", "content": answer})
+    st.markdown("<div class='section-title'>Price detail, if you need it</div><p class='section-copy'>The comparison comes first. Open a chart only for the candidate that still needs a closer technical check.</p>", unsafe_allow_html=True)
+    show_chart = st.toggle("Show a candidate chart", value=False, key=f"analysis-show-chart:{chat_key}")
+    if show_chart:
+        chart_symbol = st.selectbox("Chart candidate", symbols, key=f"analysis-chart-symbol:{chat_key}")
+        try:
+            history, stale = load_with_last_valid(lambda: yahoo_chart_history(yahoo_symbol(chart_symbol), "1y", "1d", ADJUSTMENT_CONTRACT), st.session_state.get(f"analysis-chart-history:{chat_key}:{chart_symbol}"))
+            st.session_state[f"analysis-chart-history:{chat_key}:{chart_symbol}"] = history
+            st.plotly_chart(market_chart(history, yahoo_symbol(chart_symbol), [], days=YAHOO_WINDOWS["1Y"], height=520), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+            if stale:
+                st.caption("Showing the last valid Yahoo Finance chart from this session.")
+            trendlyne_widget("technical-widget", chart_symbol, 520)
+        except (YahooChartError, ValueError):
+            st.warning("This 1-year Yahoo Finance chart is temporarily unavailable.")
+    st.markdown("<div class='section-title'>Keep the names worth revisiting</div>", unsafe_allow_html=True)
+    watchlist_add_control(list(symbols), set(data["Symbol"]), f"analysis:{','.join(symbols)}")
+    st.caption("Yahoo Finance fields are provider-reported and can be missing or delayed. Trendlyne widgets are third-party views. This workspace is for research, not investment advice.")
+
+
 def mover_row(row: pd.Series) -> None:
     strength = min(abs(row["Change %"]) / 8 * 100, 100)
     color = GREEN if row["Change %"] >= 0 else RED
@@ -935,11 +1066,15 @@ def screener(data: pd.DataFrame):
     </section>
     """, unsafe_allow_html=True)
     preset = st.radio("Quick scan", ["All stocks", "Top gainers", "Near day high", "Pullbacks"], horizontal=True)
-    search_col, industry_col, sort_col = st.columns([1.35, 1.15, 1])
-    query = search_col.text_input("Search company or symbol", placeholder="e.g. Reliance, TCS, BANK")
+    industry_col, sort_col = st.columns([1.25, 1])
     industry = industry_col.selectbox("Industry", ["All"] + sorted(data.Industry.dropna().unique().tolist()))
     sort_label = sort_col.selectbox("Rank results by", ["Daily move", "Near day high", "Price"])
     with st.expander("Refine scan", expanded=False):
+        query = st.text_input(
+            "Find a specific company",
+            placeholder="Optional — e.g. Reliance, TCS, BANK",
+            help="Use this only when you already have a company or symbol in mind. Quick scans and filters are for discovering names.",
+        )
         change_min_col, change_max_col = st.columns(2)
         min_change = change_min_col.number_input("Minimum daily move (%)", value=0.0, step=0.25)
         max_change = change_max_col.number_input("Maximum daily move (%)", value=0.0, step=0.25, help="Set a value only when you want to cap the move.")
@@ -1051,38 +1186,12 @@ def screener(data: pd.DataFrame):
         "market_cap_cr": st.column_config.NumberColumn("Mkt cap", format="Rs %.0f Cr"),
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
-    st.divider()
-    show_trendlyne_compare = st.toggle("Compare QVT and SWOT scores with Trendlyne", key="trendlyne-screener-toggle", help="Uses Trendlyne's public widgets for an additional quality, valuation, technical and SWOT view. Open only when you want this third-party data.")
-    if show_trendlyne_compare:
-        comparison_symbols = st.multiselect(
-            "Choose up to 5 screened stocks",
-            result["Symbol"].tolist(),
-            default=result["Symbol"].head(min(2, len(result))).tolist(),
-            max_selections=5,
-            key="trendlyne-screener-symbols",
-        )
-        if comparison_symbols:
-            st.caption("Trendlyne widgets are provider-supplied and may use a different update schedule than the NSE and Yahoo Finance panels above.")
-            score_tabs = st.tabs(comparison_symbols)
-            for tab, comparison_symbol in zip(score_tabs, comparison_symbols):
-                with tab:
-                    qvt_col, swot_col = st.columns(2)
-                    with qvt_col:
-                        st.markdown("<div class='panel-title'>QVT score</div><div class='panel-subtitle'>Quality · valuation · technicals</div>", unsafe_allow_html=True)
-                        trendlyne_widget("qvt-widget", comparison_symbol, 365)
-                    with swot_col:
-                        st.markdown("<div class='panel-title'>SWOT view</div><div class='panel-subtitle'>Strengths · weaknesses · opportunities · threats</div>", unsafe_allow_html=True)
-                        trendlyne_widget("swot-widget", comparison_symbol, 365)
-        else:
-            st.info("Choose one to five stocks from this screen to open their Trendlyne scorecards.")
-    research_workbench(result, str(data["date"].iloc[0]), preset_copy, sort_label)
-    show_screen_chart = st.toggle("Open a chart from this screen", key="screener-chart-toggle", help="Keep the screen focused on comparison; open a chart only when a result needs a closer look.")
-    if show_screen_chart:
-        inspect_col, action_col, watch_add_col = st.columns([3, 1, 1], vertical_alignment="bottom")
-        inspect_symbol = inspect_col.selectbox("Inspect a result in Charts", result["Symbol"].tolist(), key="screener_inspect_symbol")
-        action_col.button("Open chart", use_container_width=True, on_click=open_chart_for, args=(inspect_symbol,))
-        watch_add_col.markdown("<div class='small-note'>Watchlist</div>", unsafe_allow_html=True)
-        watchlist_add_control([inspect_symbol], set(data["Symbol"]), f"screener:{inspect_symbol}")
+    st.markdown("<div class='section-title'>Ready to compare?</div><p class='section-copy'>Select 2–5 candidates, then take the evidence to Analyse. This screen stays focused on finding the names.</p>", unsafe_allow_html=True)
+    analysis_symbols = st.multiselect("Candidates for Analyse", result["Symbol"].tolist(), max_selections=5, key="screener-analysis-symbols", placeholder="Choose 2 to 5 matches")
+    if len(analysis_symbols) >= 2:
+        st.button("Compare in Analyse", type="primary", on_click=open_analysis_for, args=(analysis_symbols,), key="open-analysis-from-screener")
+    elif analysis_symbols:
+        st.caption("Choose one more candidate to compare them in Analyse.")
     st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
 
 
@@ -1138,9 +1247,11 @@ def charts(data: pd.DataFrame):
 inject_css()
 snapshot = st.session_state.get("market_snapshot")
 load_requested = False
+if st.session_state.get("page") == "Charts":
+    st.session_state["page"] = "Analyse"
 with st.sidebar:
     st.markdown("<div class='brand'>pai<b>saan</b></div><p class='small-note'>CapitalSense Advisors</p>", unsafe_allow_html=True)
-    page = st.radio("Navigate", ["Dashboard", "Screener", "Charts", "Watchlists"], label_visibility="collapsed", key="page")
+    page = st.radio("Navigate", ["Dashboard", "Screener", "Analyse", "Watchlists"], label_visibility="collapsed", key="page")
     st.divider()
     st.markdown("<div class='eyebrow'>Data mode</div>", unsafe_allow_html=True)
     if snapshot is None:
@@ -1190,7 +1301,7 @@ if page == "Dashboard":
     dashboard(data, updated)
 elif page == "Screener":
     screener(data)
-elif page == "Charts":
-    charts(data)
+elif page == "Analyse":
+    analysis_workspace(data)
 elif page == "Watchlists":
     watchlist_page(data)
