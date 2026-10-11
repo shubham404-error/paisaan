@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 
 PUBLIC_SYMBOL = re.compile(r"^[A-Z0-9&-]{1,32}$")
 OVERLAYS = ("EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "Bollinger")
-ADJUSTMENT_CONTRACT = "raw-close-plus-adjusted-ohlc-v1"
+ADJUSTMENT_CONTRACT = "raw-close-plus-adjusted-ohlc-v2"
 
 
 class YahooChartError(RuntimeError):
@@ -145,7 +145,17 @@ def market_chart(
     show_volume_sma: bool = True,
 ) -> go.Figure:
     """Three-panel Terminal-compatible daily candlestick chart."""
-    chart = frame.sort_values("Date").tail(days).copy()
+    chart_source = frame.sort_values("Date").copy()
+    # Cached session histories created before Bollinger support do not have the
+    # derived columns. Rebuild only this requested overlay so old sessions do
+    # not silently render a chart without the bands.
+    if "Bollinger" in overlays and not {"BollingerUpper", "BollingerLower"}.issubset(chart_source.columns):
+        close = pd.to_numeric(chart_source["Close"], errors="coerce")
+        basis = close.rolling(20, min_periods=20).mean()
+        spread = close.rolling(20, min_periods=20).std(ddof=0)
+        chart_source["BollingerUpper"] = basis + 2 * spread
+        chart_source["BollingerLower"] = basis - 2 * spread
+    chart = chart_source.tail(days).copy()
     figure = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.025, row_heights=[0.66, 0.14, 0.20])
     figure.add_trace(go.Candlestick(x=chart["Date"], open=chart["Open"], high=chart["High"], low=chart["Low"], close=chart["Close"], name=symbol, increasing_line_color="#2bd4a4", increasing_fillcolor="#2bd4a4", decreasing_line_color="#ff6b6b", decreasing_fillcolor="#ff6b6b"), row=1, col=1)
     colors = {"EMA9": "#6ea8fe", "EMA21": "#f0a51a", "SMA20": "#b084f5", "SMA50": "#14b8a6", "SMA200": "#ef6461", "EMA255": "#f59e0b"}

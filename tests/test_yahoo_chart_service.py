@@ -82,7 +82,8 @@ class YahooChartServiceTests(unittest.TestCase):
 
     def test_bollinger_bands_render_as_a_single_overlay(self):
         indicators = calculate_indicators(normalize_history(valid_yahoo_frame(), "RELIANCE.NS"))
-        figure = market_chart(indicators, "RELIANCE.NS", ["Bollinger"], days=180)
+        old_cached_indicators = indicators.drop(columns=["BollingerUpper", "BollingerLower"])
+        figure = market_chart(old_cached_indicators, "RELIANCE.NS", ["Bollinger"], days=180)
         self.assertIn("Bollinger (20, 2)", [trace.name for trace in figure.data])
 
 

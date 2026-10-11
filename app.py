@@ -29,6 +29,7 @@ ACCENT, GREEN, RED, MUTED = "#2bd4a4", "#2bd4a4", "#ff6b6b", "#8d98a7"
 AI_RESEARCH_SCHEMA_VERSION = "v2"
 TRENDLYNE_WIDGET_BASE_URL = "https://trendlyne.com/web-widget"
 TRADINGVIEW_TECHNICAL_SCRIPT = "https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js"
+TRADINGVIEW_ADVANCED_CHART_SCRIPT = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js"
 
 
 def safe_text(value: object) -> str:
@@ -125,6 +126,43 @@ def tradingview_technical_widget(symbol: str, height: int) -> None:
 <div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div>
 <div class="tradingview-widget-copyright"><a href="{escape(technicals_url, quote=True)}" rel="noopener nofollow" target="_blank">{escape(symbol)} technical summary</a><span> by TradingView</span></div>
 <script type="text/javascript" src="{TRADINGVIEW_TECHNICAL_SCRIPT}" async>{settings}</script>
+</div>""",
+        height=height,
+        scrolling=False,
+    )
+
+
+def tradingview_advanced_chart(symbol: str, height: int) -> None:
+    """Render TradingView's official advanced chart as an opt-in research tool."""
+    tv_symbol = tradingview_symbol(symbol)
+    settings = json.dumps({
+        "autosize": True,
+        "symbol": tv_symbol,
+        "interval": "D",
+        "timezone": "Asia/Kolkata",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "withdateranges": True,
+        "allow_symbol_change": False,
+        "save_image": True,
+        "calendar": False,
+        "details": False,
+        "hotlist": False,
+        "hide_side_toolbar": False,
+        "hide_top_toolbar": False,
+        "hide_legend": False,
+        "hide_volume": False,
+        "studies": [],
+        "backgroundColor": "#080a0d",
+        "gridColor": "rgba(72, 83, 97, 0.28)",
+    })
+    chart_url = f"https://www.tradingview.com/symbols/{quote(tv_symbol.replace(':', '-'), safe='-')}/"
+    components.html(
+        f"""<div class="tradingview-widget-container" style="height:{height}px;width:100%;background:#080a0d">
+<div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div>
+<div class="tradingview-widget-copyright"><a href="{escape(chart_url, quote=True)}" rel="noopener nofollow" target="_blank">{escape(symbol)} chart</a><span> by TradingView</span></div>
+<script type="text/javascript" src="{TRADINGVIEW_ADVANCED_CHART_SCRIPT}" async>{settings}</script>
 </div>""",
         height=height,
         scrolling=False,
@@ -1020,7 +1058,8 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             st.plotly_chart(market_chart(history, yahoo_symbol(chart_symbol), selected_overlays, days=YAHOO_WINDOWS[chart_range], height=520, rsi_lines=rsi_lines, show_volume_sma=show_volume_sma), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             if stale:
                 st.caption("Showing the last valid Yahoo Finance chart from this session.")
-            if st.toggle(
+            tradingview_options = st.columns(2)
+            if tradingview_options[0].toggle(
                 "Load TradingView technical summary",
                 value=False,
                 key=f"analysis-load-tradingview-technical:{chat_key}:{chart_symbol}",
@@ -1028,6 +1067,14 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             ):
                 st.caption("TradingView technical ratings summarize mechanical moving-average and oscillator signals; they are not investment advice.")
                 tradingview_technical_widget(chart_symbol, 520)
+            if tradingview_options[1].toggle(
+                "Open TradingView advanced chart",
+                value=False,
+                key=f"analysis-load-tradingview-advanced:{chat_key}:{chart_symbol}",
+                help="Opens an optional full-featured chart with TradingView drawing tools, studies, and time controls.",
+            ):
+                st.caption("TradingView uses its own market-data view. Use the Yahoo Finance chart above for paisaan's research packet.")
+                tradingview_advanced_chart(chart_symbol, 680)
         except (YahooChartError, ValueError):
             st.warning(f"This {chart_range} Yahoo Finance chart is temporarily unavailable.")
     st.markdown("<div class='section-title'>Keep the names worth revisiting</div>", unsafe_allow_html=True)
@@ -1483,10 +1530,15 @@ def charts(data: pd.DataFrame):
     rsi_lines = [(level, f"RSI {level}") for level in selected_levels]
     figure = market_chart(history, resolved_symbol, selected_overlays, days=YAHOO_WINDOWS[range_label], rsi_lines=rsi_lines)
     st.plotly_chart(figure, use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-    show_tradingview_technicals = st.toggle("Load TradingView technical summary", key="tradingview-chart-toggle", help="Opens TradingView's third-party moving-average and oscillator summary for the chart symbol.")
+    tradingview_options = st.columns(2)
+    show_tradingview_technicals = tradingview_options[0].toggle("Load TradingView technical summary", key="tradingview-chart-toggle", help="Opens TradingView's third-party moving-average and oscillator summary for the chart symbol.")
     if show_tradingview_technicals:
         st.markdown(f"<div class='section-title'>TradingView technical summary <span class='small-note'>/ {safe_text(symbol)}</span></div><p class='section-copy'>An optional provider view of mechanical moving-average and oscillator signals, alongside the Yahoo Finance chart above.</p>", unsafe_allow_html=True)
         tradingview_technical_widget(symbol, 550)
+    show_tradingview_advanced = tradingview_options[1].toggle("Open TradingView advanced chart", key="tradingview-advanced-chart-toggle", help="Opens TradingView's full charting tools for the selected symbol.")
+    if show_tradingview_advanced:
+        st.markdown(f"<div class='section-title'>TradingView advanced chart <span class='small-note'>/ {safe_text(symbol)}</span></div><p class='section-copy'>Optional provider chart with drawing tools, studies and time controls. Yahoo Finance remains the data source for the paisaan chart above.</p>", unsafe_allow_html=True)
+        tradingview_advanced_chart(symbol, 680)
     chart_question_chat(history, symbol, range_label)
     st.caption(f"Provider: Yahoo Finance · {resolved_symbol} · daily EOD data · latest market date: {latest['Date']:%d %b %Y} · adjusted OHLC contract: {ADJUSTMENT_CONTRACT}")
 
