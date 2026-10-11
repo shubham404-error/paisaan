@@ -873,9 +873,16 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             st.plotly_chart(relative_returns_chart(returns, symbols), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
         except (YahooChartError, ValueError):
             st.warning("The benchmarked return chart is temporarily unavailable.")
-    scorecard_title = "Provider scorecard" if len(symbols) == 1 else "Provider scorecards"
-    st.markdown(f"<div class='section-title'>{scorecard_title}</div><p class='section-copy'>Quality, valuation, technical and SWOT views from Trendlyne. Provider timings can differ from the Yahoo Finance snapshot above.</p>", unsafe_allow_html=True)
-    score_tabs = st.tabs(list(symbols)) if len(symbols) > 1 else [st.container()]
+    load_scorecards = st.toggle(
+        "Load optional Trendlyne scores",
+        value=False,
+        key=f"analysis-load-trendlyne:{chat_key}",
+        help="Loads third-party QVT and SWOT panels only when you want an extra provider view.",
+    )
+    scorecard_title = ("Provider scorecard" if len(symbols) == 1 else "Provider scorecards") if load_scorecards else ""
+    if load_scorecards:
+        st.markdown(f"<div class='section-title'>{scorecard_title}</div><p class='section-copy'>Quality, valuation, technical and SWOT views from Trendlyne. Provider timings can differ from the Yahoo Finance snapshot above.</p>", unsafe_allow_html=True)
+    score_tabs = (st.tabs(list(symbols)) if len(symbols) > 1 else [st.container()]) if load_scorecards else []
     for tab, symbol in zip(score_tabs, symbols):
         with tab:
             qvt_col, swot_col = st.columns(2)
