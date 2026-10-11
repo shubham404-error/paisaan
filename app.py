@@ -772,7 +772,7 @@ def analysis_workspace(data: pd.DataFrame) -> None:
           <h1>Compare the pehchaan, not just the price.</h1>
           <div class='small-note'>Bring a short list from Screener, then use the same Yahoo Finance snapshot, benchmarked returns and provider scorecards to decide what deserves a place on your watchlist.</div>
         </div>
-        <div class='screener-hero-note'><b style='color:#e9eef3'>Best-use shortcut</b><br>Pick 2–5 names. Read the table and return paths first; use the chart only when a price question remains.</div>
+        <div class='screener-hero-note'><b style='color:#e9eef3'>Best-use shortcut</b><br>Start with one name. Add peers only when you want a side-by-side comparison.</div>
       </div>
       <div class='guide-steps'>
         <div class='guide-step'><span class='guide-number'>1</span><b>Compare facts</b><p>Valuation, quality and daily technical context from one comparable data packet.</p></div>
@@ -781,20 +781,26 @@ def analysis_workspace(data: pd.DataFrame) -> None:
       </div>
     </section>
     """, unsafe_allow_html=True)
-    selected_symbols = st.multiselect(
-        "Candidates to analyse (2–5)",
-        data["Symbol"].tolist(),
-        default=suggested,
-        max_selections=5,
-        key="analysis-candidate-symbols",
-        placeholder="Start with candidates from Screener, or choose names here",
-    )
-    if len(selected_symbols) < 2:
-        st.markdown("<div class='screener-idle'><b>Bring two to five candidates.</b><span class='small-note'>Run a scan first, select the names to compare, then send them here. No random full-universe spreadsheet, no jaldibaazi.</span></div>", unsafe_allow_html=True)
-        return
+    analysis_mode = st.radio("Research mode", ["Single-stock research", "Compare stocks"], horizontal=True, key="analysis-mode")
+    if analysis_mode == "Single-stock research":
+        default_symbol = suggested[0] if suggested else data["Symbol"].iloc[0]
+        selected_symbols = [st.selectbox("Stock to research", data["Symbol"].tolist(), index=data["Symbol"].tolist().index(default_symbol), key="analysis-single-symbol")]
+    else:
+        selected_symbols = st.multiselect(
+            "Candidates to compare (2–10)",
+            data["Symbol"].tolist(),
+            default=suggested[:10],
+            max_selections=10,
+            key="analysis-candidate-symbols",
+            placeholder="Start with candidates from Screener, or choose names here",
+        )
+        if len(selected_symbols) < 2:
+            st.markdown("<div class='screener-idle'><b>Pick two or more candidates.</b><span class='small-note'>Comparison adds return paths and side-by-side scorecards only when you have peers to compare.</span></div>", unsafe_allow_html=True)
+            return
     symbols = tuple(sorted(selected_symbols))
     chat_key = f"analysis-comparison:v1:{','.join(symbols)}"
-    if st.button("Load comparison", type="primary", key=f"load-{chat_key}"):
+    analysis_action = "Load analysis" if len(symbols) == 1 else "Load comparison"
+    if st.button(analysis_action, type="primary", key=f"load-{chat_key}"):
         try:
             st.session_state[chat_key] = {"facts": yahoo_comparison_facts(symbols), "messages": []}
         except (YahooChartError, ValueError) as error:
@@ -802,7 +808,7 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             return
     chat = st.session_state.get(chat_key)
     if chat is None:
-        st.caption("Load a compact Yahoo Finance snapshot only for these selected candidates.")
+        st.caption("Load a compact Yahoo Finance snapshot only for the selected candidate." if len(symbols) == 1 else "Load a compact Yahoo Finance snapshot only for these selected candidates.")
         return
     comparison_table = pd.DataFrame(chat["facts"]["stocks"]).rename(columns={
         "symbol": "Symbol", "as_of": "As of", "close": "Close", "pe": "P/E", "pb": "P/B", "roe": "ROE %",
@@ -810,7 +816,9 @@ def analysis_workspace(data: pd.DataFrame) -> None:
         "ema_21": "EMA-21", "sma_50": "SMA-50", "sma_200": "SMA-200",
     })
     table_columns = ["Symbol", "As of", "Close", "P/E", "P/B", "ROE %", "Yield %", "Mkt cap (Cr)", "RSI-14", "EMA-9", "EMA-21", "SMA-50", "SMA-200"]
-    st.markdown("<div class='section-title'>Comparable snapshot</div><p class='section-copy'>Yahoo Finance data for only the candidates you selected. Missing fields stay blank rather than being guessed.</p>", unsafe_allow_html=True)
+    snapshot_title = "Stock snapshot" if len(symbols) == 1 else "Comparable snapshot"
+    snapshot_copy = "Yahoo Finance data for this selected stock." if len(symbols) == 1 else "Yahoo Finance data for only the candidates you selected."
+    st.markdown(f"<div class='section-title'>{snapshot_title}</div><p class='section-copy'>{snapshot_copy} Missing fields stay blank rather than being guessed.</p>", unsafe_allow_html=True)
     st.dataframe(comparison_table[[column for column in table_columns if column in comparison_table]], use_container_width=True, hide_index=True, column_config={
         "Close": st.column_config.NumberColumn(format="Rs %.2f"), "P/E": st.column_config.NumberColumn(format="%.1f"),
         "P/B": st.column_config.NumberColumn(format="%.1f"), "ROE %": st.column_config.NumberColumn(format="%.1f%%"),
@@ -818,14 +826,16 @@ def analysis_workspace(data: pd.DataFrame) -> None:
         "RSI-14": st.column_config.NumberColumn(format="%.1f"), "EMA-9": st.column_config.NumberColumn(format="Rs %.2f"),
         "EMA-21": st.column_config.NumberColumn(format="Rs %.2f"), "SMA-50": st.column_config.NumberColumn(format="Rs %.2f"), "SMA-200": st.column_config.NumberColumn(format="Rs %.2f"),
     })
-    try:
-        returns = yahoo_relative_returns(symbols)
-        st.markdown("<div class='section-title'>One-year return paths</div><p class='section-copy'>Normalized price returns from the same first common Yahoo Finance observation. Nifty 50 is the context, not a promise.</p>", unsafe_allow_html=True)
-        st.plotly_chart(relative_returns_chart(returns, symbols), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
-    except (YahooChartError, ValueError):
-        st.warning("The benchmarked return chart is temporarily unavailable.")
-    st.markdown("<div class='section-title'>Provider scorecards</div><p class='section-copy'>Quality, valuation, technical and SWOT views from Trendlyne. Provider timings can differ from the Yahoo Finance snapshot above.</p>", unsafe_allow_html=True)
-    score_tabs = st.tabs(list(symbols))
+    if len(symbols) > 1:
+        try:
+            returns = yahoo_relative_returns(symbols)
+            st.markdown("<div class='section-title'>One-year return paths</div><p class='section-copy'>Normalized price returns from the same first common Yahoo Finance observation. Nifty 50 is the context, not a promise.</p>", unsafe_allow_html=True)
+            st.plotly_chart(relative_returns_chart(returns, symbols), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+        except (YahooChartError, ValueError):
+            st.warning("The benchmarked return chart is temporarily unavailable.")
+    scorecard_title = "Provider scorecard" if len(symbols) == 1 else "Provider scorecards"
+    st.markdown(f"<div class='section-title'>{scorecard_title}</div><p class='section-copy'>Quality, valuation, technical and SWOT views from Trendlyne. Provider timings can differ from the Yahoo Finance snapshot above.</p>", unsafe_allow_html=True)
+    score_tabs = st.tabs(list(symbols)) if len(symbols) > 1 else [st.container()]
     for tab, symbol in zip(score_tabs, symbols):
         with tab:
             qvt_col, swot_col = st.columns(2)
@@ -835,22 +845,28 @@ def analysis_workspace(data: pd.DataFrame) -> None:
             with swot_col:
                 st.markdown("<div class='panel-title'>SWOT view</div><div class='panel-subtitle'>Strengths · weaknesses · opportunities · threats</div>", unsafe_allow_html=True)
                 trendlyne_widget("swot-widget", symbol, 365)
-    st.markdown("<div class='section-title'>Ask about this comparison</div><p class='section-copy'>Ask a decision-focused question. The AI sees only this selected Yahoo Finance packet.</p>", unsafe_allow_html=True)
+    question_title = "Ask about this stock" if len(symbols) == 1 else "Ask about this comparison"
+    st.markdown(f"<div class='section-title'>{question_title}</div><p class='section-copy'>Ask a decision-focused question. The AI sees only this selected Yahoo Finance packet.</p>", unsafe_allow_html=True)
     for message in chat["messages"]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     prompt_columns = st.columns(2)
-    prompts = [
+    prompts = ([
+        ("Valuation", "What does the available valuation data say about this stock, and what should I inspect next?"),
+        ("Quality", "What do the available quality signals such as ROE suggest, and what should I inspect next?"),
+        ("Technical setup", "How should I read the current technical setup from price, RSI, and moving averages?"),
+        ("Research checklist", "Give me the three most important checks to make before adding this stock to my watchlist."),
+    ] if len(symbols) == 1 else [
         ("Valuation", "Which selected stock has the more attractive valuation profile based on the available Yahoo Finance data?"),
         ("Quality", "How do these stocks compare on available quality signals such as ROE, and what should I inspect next?"),
         ("Technical setup", "Which selected stock has the stronger current technical setup based on price, RSI, and moving averages?"),
         ("Decision checklist", "Give me the three most important checks to make before choosing one of these stocks."),
-    ]
+    ])
     selected_prompt = None
     for index, (label, prompt) in enumerate(prompts):
         if prompt_columns[index % 2].button(label, key=f"analysis-prompt:{chat_key}:{index}", use_container_width=True):
             selected_prompt = prompt
-    question = selected_prompt or st.chat_input("Ask a follow-up about these candidates", key=f"analysis-ask:{chat_key}")
+    question = selected_prompt or st.chat_input("Ask a follow-up about this stock" if len(symbols) == 1 else "Ask a follow-up about these candidates", key=f"analysis-ask:{chat_key}")
     if question:
         api_key, gemini_model = gemini_settings()
         if not api_key:
@@ -872,10 +888,21 @@ def analysis_workspace(data: pd.DataFrame) -> None:
     show_chart = st.toggle("Show a candidate chart", value=False, key=f"analysis-show-chart:{chat_key}")
     if show_chart:
         chart_symbol = st.selectbox("Chart candidate", symbols, key=f"analysis-chart-symbol:{chat_key}")
+        st.markdown("<div class='panel-title'>Technical overlays</div><div class='panel-subtitle'>Keep the chart clean; add only the indicators that answer your question.</div>", unsafe_allow_html=True)
+        overlay_labels = {"EMA9": "EMA 9", "EMA21": "EMA 21", "SMA20": "SMA 20", "SMA50": "SMA 50", "SMA200": "SMA 200", "EMA255": "EMA 255"}
+        selected_overlays: list[str] = []
+        overlay_columns = st.columns(3)
+        for index, overlay in enumerate(OVERLAYS):
+            if overlay_columns[index % 3].checkbox(overlay_labels[overlay], key=f"analysis-overlay:{chat_key}:{chart_symbol}:{overlay}"):
+                selected_overlays.append(overlay)
+        technical_options = st.columns(2)
+        show_volume_sma = technical_options[0].checkbox("20D average volume", key=f"analysis-volume-sma:{chat_key}:{chart_symbol}")
+        show_rsi_guides = technical_options[1].checkbox("RSI 30 / 70 guides", value=True, key=f"analysis-rsi-guides:{chat_key}:{chart_symbol}")
         try:
             history, stale = load_with_last_valid(lambda: yahoo_chart_history(yahoo_symbol(chart_symbol), "1y", "1d", ADJUSTMENT_CONTRACT), st.session_state.get(f"analysis-chart-history:{chat_key}:{chart_symbol}"))
             st.session_state[f"analysis-chart-history:{chat_key}:{chart_symbol}"] = history
-            st.plotly_chart(market_chart(history, yahoo_symbol(chart_symbol), [], days=YAHOO_WINDOWS["1Y"], height=520), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
+            rsi_lines = [(30, "RSI 30"), (70, "RSI 70")] if show_rsi_guides else []
+            st.plotly_chart(market_chart(history, yahoo_symbol(chart_symbol), selected_overlays, days=YAHOO_WINDOWS["1Y"], height=520, rsi_lines=rsi_lines, show_volume_sma=show_volume_sma), use_container_width=True, config={"displaylogo": False, "scrollZoom": True})
             if stale:
                 st.caption("Showing the last valid Yahoo Finance chart from this session.")
             trendlyne_widget("technical-widget", chart_symbol, 520)
@@ -1266,12 +1293,10 @@ def screener(data: pd.DataFrame):
         "1Y return": st.column_config.NumberColumn("1Y return", format="%+.2f%%"),
     }
     st.dataframe(shown, use_container_width=True, hide_index=True, height=min(560, 70 + len(shown) * 35), column_config=column_config)
-    st.markdown("<div class='section-title'>Ready to compare?</div><p class='section-copy'>Select 2–5 candidates, then take the evidence to Analyse. This screen stays focused on finding the names.</p>", unsafe_allow_html=True)
-    analysis_symbols = st.multiselect("Candidates for Analyse", result["Symbol"].tolist(), max_selections=5, key="screener-analysis-symbols", placeholder="Choose 2 to 5 matches")
-    if len(analysis_symbols) >= 2:
-        st.button("Compare in Analyse", type="primary", on_click=open_analysis_for, args=(analysis_symbols,), key="open-analysis-from-screener")
-    elif analysis_symbols:
-        st.caption("Choose one more candidate to compare them in Analyse.")
+    st.markdown("<div class='section-title'>Take a name to Analyse</div><p class='section-copy'>Send one stock for focused research or up to 10 for a side-by-side comparison. This screen stays focused on finding candidates.</p>", unsafe_allow_html=True)
+    analysis_symbols = st.multiselect("Candidates for Analyse", result["Symbol"].tolist(), max_selections=10, key="screener-analysis-symbols", placeholder="Choose up to 10 matches")
+    if analysis_symbols:
+        st.button("Open in Analyse", type="primary", on_click=open_analysis_for, args=(analysis_symbols,), key="open-analysis-from-screener")
     st.caption("NSE fields use the latest cached Bhavcopy. Yahoo fundamentals are provider-reported and may be missing or delayed. This is a descriptive screen, not investment advice.")
 
 
