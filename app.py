@@ -1149,7 +1149,7 @@ def market_mood_card() -> None:
             f"""<section class='mmi-card' style='--mmi-value:{value:.1f}%;--mmi-color:{color}'>
   <div class='mmi-copy'><div class='mmi-kicker'>Market mood index</div><b>{safe_text(zone)}</b><span>India-wide sentiment context · not a buy or sell call</span></div>
   <div class='mmi-meter' role='img' aria-label='Market Mood Index {value:.1f} out of 100, {safe_text(zone)}'><div class='mmi-track'><i class='mmi-marker'></i></div><div class='mmi-labels'><span>Extreme fear</span><span>Fear</span><span>Greed</span><span>Extreme greed</span></div></div>
-  <div class='mmi-score'><b>{value:.1f}</b><span>Tickertape · {safe_text(snapshot['as_of'])}</span></div>
+  <div class='mmi-score'><b>{value:.1f}</b><span>Updated {safe_text(snapshot['as_of'])}</span></div>
 </section>""",
             unsafe_allow_html=True,
         )
