@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 PUBLIC_SYMBOL = re.compile(r"^[A-Z0-9&-]{1,32}$")
-OVERLAYS = ("EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255")
+OVERLAYS = ("EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "Bollinger")
 ADJUSTMENT_CONTRACT = "raw-close-plus-adjusted-ohlc-v1"
 
 
@@ -121,6 +121,9 @@ def calculate_indicators(history: pd.DataFrame) -> pd.DataFrame:
     frame["EMA9"] = close.ewm(span=9, adjust=False).mean()
     frame["EMA21"] = close.ewm(span=21, adjust=False).mean()
     frame["SMA20"] = close.rolling(20, min_periods=20).mean()
+    rolling_std_20 = close.rolling(20, min_periods=20).std(ddof=0)
+    frame["BollingerUpper"] = frame["SMA20"] + 2 * rolling_std_20
+    frame["BollingerLower"] = frame["SMA20"] - 2 * rolling_std_20
     frame["SMA50"] = close.rolling(50, min_periods=50).mean()
     frame["SMA200"] = close.rolling(200, min_periods=200).mean()
     frame["EMA255"] = close.ewm(span=255, adjust=False, min_periods=255).mean()
@@ -146,6 +149,11 @@ def market_chart(
     figure = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.025, row_heights=[0.66, 0.14, 0.20])
     figure.add_trace(go.Candlestick(x=chart["Date"], open=chart["Open"], high=chart["High"], low=chart["Low"], close=chart["Close"], name=symbol, increasing_line_color="#2bd4a4", increasing_fillcolor="#2bd4a4", decreasing_line_color="#ff6b6b", decreasing_fillcolor="#ff6b6b"), row=1, col=1)
     colors = {"EMA9": "#6ea8fe", "EMA21": "#f0a51a", "SMA20": "#b084f5", "SMA50": "#14b8a6", "SMA200": "#ef6461", "EMA255": "#f59e0b"}
+    if "Bollinger" in overlays and {"BollingerUpper", "BollingerLower"}.issubset(chart.columns):
+        bands = chart.dropna(subset=["BollingerUpper", "BollingerLower"])
+        if not bands.empty:
+            figure.add_trace(go.Scatter(x=bands["Date"], y=bands["BollingerLower"], mode="lines", name="Bollinger lower", line={"width": 1, "color": "rgba(120, 168, 255, .55)"}, showlegend=False), row=1, col=1)
+            figure.add_trace(go.Scatter(x=bands["Date"], y=bands["BollingerUpper"], mode="lines", name="Bollinger (20, 2)", line={"width": 1, "color": "#78a8ff"}, fill="tonexty", fillcolor="rgba(120, 168, 255, .10)"), row=1, col=1)
     for column in overlays:
         if column in chart.columns and chart[column].notna().any():
             figure.add_trace(go.Scatter(x=chart["Date"], y=chart[column], mode="lines", name=column, line={"width": 1.8, "color": colors.get(column, "#cbd5e1")}), row=1, col=1)

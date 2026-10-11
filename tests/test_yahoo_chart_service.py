@@ -33,7 +33,7 @@ class YahooChartServiceTests(unittest.TestCase):
         self.assertEqual(history.loc[0, "Close"], 50)
         self.assertEqual(history.loc[0, "High"], 50.75)
         indicators = calculate_indicators(history)
-        required = {"EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "RSI14", "VolumeSMA20", "Cross9_21", "Cross20_50", "Cross50_200"}
+        required = {"EMA9", "EMA21", "SMA20", "SMA50", "SMA200", "EMA255", "BollingerUpper", "BollingerLower", "RSI14", "VolumeSMA20", "Cross9_21", "Cross20_50", "Cross50_200"}
         self.assertTrue(required.issubset(indicators.columns))
         rsi = indicators["RSI14"].dropna()
         self.assertTrue(rsi.between(0, 100).all())
@@ -79,6 +79,11 @@ class YahooChartServiceTests(unittest.TestCase):
         self.assertIn("yaxis2", figure.layout)
         self.assertIn("yaxis3", figure.layout)
         self.assertEqual(figure.layout.yaxis3.range, (0, 100))
+
+    def test_bollinger_bands_render_as_a_single_overlay(self):
+        indicators = calculate_indicators(normalize_history(valid_yahoo_frame(), "RELIANCE.NS"))
+        figure = market_chart(indicators, "RELIANCE.NS", ["Bollinger"], days=180)
+        self.assertIn("Bollinger (20, 2)", [trace.name for trace in figure.data])
 
 
 if __name__ == "__main__":

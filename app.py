@@ -361,11 +361,16 @@ YAHOO_WINDOWS = {"1D": 1, "1W": 5, "1M": 22, "3M": 66, "6M": 132, "1Y": 264, "3Y
 SHORT_RANGE_OVERLAYS = {
     "1D": set(),
     "1W": {"EMA9", "EMA21"},
-    "1M": {"EMA9", "EMA21", "SMA20"},
-    "3M": {"EMA9", "EMA21", "SMA20", "SMA50"},
-    "6M": {"EMA9", "EMA21", "SMA20", "SMA50"},
+    "1M": {"EMA9", "EMA21", "SMA20", "Bollinger"},
+    "3M": {"EMA9", "EMA21", "SMA20", "SMA50", "Bollinger"},
+    "6M": {"EMA9", "EMA21", "SMA20", "SMA50", "Bollinger"},
     "1Y": set(OVERLAYS),
     "3Y": set(OVERLAYS),
+}
+OVERLAY_MINIMUM_RANGE = {
+    "EMA9": "1W or longer", "EMA21": "1W or longer", "SMA20": "1M or longer",
+    "SMA50": "3M or longer", "SMA200": "1Y or 3Y", "EMA255": "1Y or 3Y",
+    "Bollinger": "1M or longer",
 }
 
 
@@ -990,20 +995,21 @@ def analysis_workspace(data: pd.DataFrame) -> None:
         chart_symbol = chart_symbol_col.selectbox("Chart candidate", symbols, key=f"analysis-chart-symbol:{chat_key}")
         chart_range = chart_range_col.radio("Chart timeframe", list(YAHOO_WINDOWS), index=5, horizontal=True, key=f"analysis-chart-range:{chat_key}")
         st.markdown("<div class='panel-title'>Technical overlays</div><div class='panel-subtitle'>Keep the chart clean; add only the indicators that answer your question.</div>", unsafe_allow_html=True)
-        overlay_labels = {"EMA9": "EMA 9", "EMA21": "EMA 21", "SMA20": "SMA 20", "SMA50": "SMA 50", "SMA200": "SMA 200", "EMA255": "EMA 255"}
+        overlay_labels = {"EMA9": "EMA 9", "EMA21": "EMA 21", "SMA20": "SMA 20", "SMA50": "SMA 50", "SMA200": "SMA 200", "EMA255": "EMA 255", "Bollinger": "Bollinger bands (20, 2)"}
         usable_overlays = SHORT_RANGE_OVERLAYS[chart_range]
         selected_overlays: list[str] = []
-        overlay_columns = st.columns(3)
+        overlay_columns = st.columns(4)
         for index, overlay in enumerate(OVERLAYS):
             is_available = overlay in usable_overlays
-            label = overlay_labels[overlay] if is_available else f"{overlay_labels[overlay]} (use 1Y or 3Y)"
-            if overlay_columns[index % 3].checkbox(
+            label = overlay_labels[overlay] if is_available else f"{overlay_labels[overlay]} ({OVERLAY_MINIMUM_RANGE[overlay]})"
+            if overlay_columns[index % 4].checkbox(
                 label,
                 disabled=not is_available,
                 key=f"analysis-overlay:{chat_key}:{chart_symbol}:{chart_range}:{overlay}",
             ) and is_available:
                 selected_overlays.append(overlay)
-        technical_options = st.columns(2)
+        st.markdown("<div class='panel-subtitle' style='margin-top:.55rem'>Momentum and participation</div>", unsafe_allow_html=True)
+        technical_options = st.columns(4)
         show_volume_sma = technical_options[0].checkbox("20D average volume", key=f"analysis-volume-sma:{chat_key}:{chart_symbol}")
         show_rsi_guides = technical_options[1].checkbox("RSI 30 / 70 guides", value=True, key=f"analysis-rsi-guides:{chat_key}:{chart_symbol}")
         try:
