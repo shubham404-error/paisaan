@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -49,8 +51,30 @@ def trendlyne_widget_url(widget: str, symbol: str) -> str:
     return f"{TRENDLYNE_WIDGET_BASE_URL}/{widget}/Poppins/{encoded_symbol}/?{palette}"
 
 
+@st.cache_data(ttl=30 * 60, show_spinner=False)
+def trendlyne_widget_status(widget: str, symbol: str) -> tuple[bool, str]:
+    """Avoid embedding a visibly broken third-party widget frame."""
+    try:
+        request = Request(trendlyne_widget_url(widget, symbol), headers={"User-Agent": "Mozilla/5.0 (compatible; paisaan research desk)"})
+        with urlopen(request, timeout=8) as response:
+            content = response.read(120_000).decode("utf-8", errors="ignore").lower()
+        malformed_markers = ("{% if request.country_code", "something went wrong with this page", "access denied")
+        if any(marker in content for marker in malformed_markers):
+            return False, "Trendlyne returned an invalid provider page."
+        if len(content) < 500:
+            return False, "Trendlyne did not return enough widget content."
+        return True, ""
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return False, "Trendlyne is temporarily unavailable."
+
+
 def trendlyne_widget(widget: str, symbol: str, height: int) -> None:
     """Render third-party widget in an isolated iframe so provider JS stays outside the app."""
+    available, reason = trendlyne_widget_status(widget, symbol)
+    if not available:
+        title = "QVT scorecard" if widget == "qvt-widget" else "SWOT view" if widget == "swot-widget" else "technical panel"
+        st.info(f"{title} is unavailable for {symbol} right now. {reason} Yahoo Finance research remains available above.")
+        return
     url = trendlyne_widget_url(widget, symbol)
     if widget == "swot-widget":
         # Trendlyne's SWOT page uses dark text but a transparent page background.
