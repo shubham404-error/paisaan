@@ -257,7 +257,6 @@ def screened_stocks(
     max_change: float | None,
     min_price: float | None,
     max_price: float | None,
-    min_day_range_position: float | None,
 ) -> pd.DataFrame:
     """Filter only verified, cached EOD fields available in this deployment."""
     result = data.copy()
@@ -278,8 +277,6 @@ def screened_stocks(
         result = result[result["Price"] >= min_price]
     if max_price is not None:
         result = result[result["Price"] <= max_price]
-    if min_day_range_position is not None:
-        result = result[result["Day range %"] >= min_day_range_position]
     return result
 
 
@@ -1103,10 +1100,9 @@ def screener(data: pd.DataFrame):
         change_min_col, change_max_col = st.columns(2)
         min_change = change_min_col.number_input("Minimum daily move (%)", value=0.0, step=0.25)
         max_change = change_max_col.number_input("Maximum daily move (%)", value=0.0, step=0.25, help="Set a value only when you want to cap the move.")
-        price_min_col, price_max_col, range_col = st.columns(3)
+        price_min_col, price_max_col = st.columns(2)
         min_price = price_min_col.number_input("Minimum price (Rs)", min_value=0.0, value=0.0, step=50.0)
         max_price = price_max_col.number_input("Maximum price (Rs)", min_value=0.0, value=0.0, step=50.0)
-        min_day_range_position = range_col.slider("Close in top of day range (%)", 0, 100, 0, help="100 means the close was at the day's high; 50 means mid-range.")
 
     result = screened_stocks(
         data,
@@ -1116,7 +1112,6 @@ def screener(data: pd.DataFrame):
         max_change if max_change != 0 else None,
         min_price if min_price > 0 else None,
         max_price if max_price > 0 else None,
-        float(min_day_range_position) if min_day_range_position > 0 else None,
     )
     preset_copy = "Full verified universe"
     if preset == "Top gainers":
@@ -1142,7 +1137,6 @@ def screener(data: pd.DataFrame):
         max_change != 0,
         min_price > 0,
         max_price > 0,
-        min_day_range_position > 0,
         bool(fundamental_query.strip()),
     ))
     if not screen_is_active:
@@ -1216,7 +1210,6 @@ def screener(data: pd.DataFrame):
         "Industry": "Industry",
         "Last price": "Price",
         "Day move": "Change %",
-        "Close in day range": "Day range %",
         "1W return": "1W return",
         "1M return": "1M return",
         "3M return": "3M return",
